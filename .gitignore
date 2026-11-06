@@ -1,0 +1,8 @@
+# build output
+/build/
+# signing keys never go in the repo; Play App Signing holds the app key, keep the upload key offline
+/keystore/
+*.jks
+*.keystore
+# generated launcher PNGs are rebuilt by tools/make_icons.py
+/res/mipmap-*dpi/
