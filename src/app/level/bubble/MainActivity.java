@@ -44,10 +44,8 @@ public final class MainActivity extends Activity implements SensorEventListener,
         settings.load(prefs);
         settings.loadCalibration(calibrationFile());
         engine.lock = settings.lock;
-        engine.fbx = settings.fbx;
-        engine.fby = settings.fby;
-        engine.ebx = settings.ebx;
-        engine.eby = settings.eby;
+        System.arraycopy(settings.surf, 0, engine.surf, 0, 4);
+        System.arraycopy(settings.edge, 0, engine.edge, 0, 4);
         engine.rotation = display.getRotation();
 
         sensors = (SensorManager) getSystemService(SENSOR_SERVICE);

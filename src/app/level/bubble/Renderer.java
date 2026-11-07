@@ -132,13 +132,23 @@ final class Renderer {
         drawBottomBar(c, p, active);
     }
 
+    // Small text keeps a legible size when an instrument is drawn scaled down: under canvas scale s
+    // the caption stays >= 10sp and the secondary line >= 11sp on screen.
+    private float capSize(float s) {
+        return Math.max(12f * sp, 10f * sp / s);
+    }
+
+    private float secSize(float s) {
+        return Math.max(13f * sp, 11f * sp / s);
+    }
+
     /** Height of the caption + value + two-line secondary block drawn by {@link #drawReadout}. */
-    private float readoutH() {
-        return 12f * dp + 113f * sp;
+    private float readoutH(float s) {
+        return capSize(s) * 1.17f + 12f * dp + 64f * sp + secSize(s) * 2.68f;
     }
 
     private void drawSurface(Canvas c, Palette p, float top, float area, boolean active, boolean primary) {
-        float readH = readoutH(), gap = 24f * dp, minD = 150f * dp;
+        float readH = readoutH(1f), gap = 24f * dp, minD = 150f * dp;
         float d = Math.min(usable - 64f * dp, area - readH - gap);
 
         // short, wide window: readout beside the vial
@@ -151,7 +161,7 @@ final class Renderer {
             drawVial(c, p, vx, vy, d2 / 2f, 1f, primary);
             float rx = x0 + d2 + 20f * dp + rw / 2f;
             float ry = top + (area - readH) / 2f;
-            drawReadout(c, p, rx, ry, rw);
+            drawReadout(c, p, rx, ry, rw, 1f);
             if (active) hit(H_READOUT, x0, top, x0 + d2 + 20f * dp + rw, top + area, 0, 0, -1f);
             return;
         }
@@ -159,13 +169,18 @@ final class Renderer {
         // stacked; scaled down when even the minimum vial does not fit
         float dd = Math.max(d, minD);
         float blockH = dd + gap + readH;
-        float s = Math.min(1f, Math.min(area / blockH, (usable - 32f * dp) / Math.max(dd, 1f)));
+        float wFit = (usable - 32f * dp) / Math.max(dd, 1f);
+        float s = Math.min(1f, Math.min(area / blockH, wFit));
+        for (int i = 0; i < 2 && s < 1f; i++) {          // larger minimum text grows the block
+            blockH = dd + gap + readoutH(s);
+            s = Math.min(1f, Math.min(area / blockH, wFit));
+        }
         float y0 = top + Math.max(0f, (area - blockH * s) / 2f);
         float cx = cx0;
         c.save();
         if (s < 1f) c.scale(s, s, cx, y0);
         drawVial(c, p, cx, y0 + dd / 2f, dd / 2f, s, primary);
-        drawReadout(c, p, cx, y0 + dd + gap, usable - 48f * dp);
+        drawReadout(c, p, cx, y0 + dd + gap, (usable - 48f * dp) / s, s);
         c.restore();
         if (active) {
             float hw = Math.max(dd / 2f, (usable - 48f * dp) / 2f) * s;
@@ -249,15 +264,18 @@ final class Renderer {
         float availH = area + (u.calActive ? 0f : 48f * dp);
         float cx = cx0, cy = top + availH / 2f;
         float availW = Math.max(1f, usable - 32f * dp);
-        float readH = readoutH();
-        float W = Math.min(availW, Math.max(availH, 300f * dp));
+        // Tube length follows the shorter side, so turning the tube upright never squeezes it much.
+        float W = Math.min(availW, Math.max(availH, 160f * dp));
         float L = W * 0.88f;
         float h = clamp(L * 0.15f, 44f * dp, 68f * dp);
-        float H = 34f * dp + h + 30f * dp + readH;
-        float s0 = Math.min(1f, Math.min(availW / W, availH / H));    // tube horizontal on screen
-        float s90 = Math.min(1f, Math.min(availW / H, availH / W));   // tube vertical on screen
         float sn = (float) Math.sin(Math.toRadians(u.rotation));
-        float s = s0 + (s90 - s0) * sn * sn;
+        float s = 1f, H = 0f;
+        for (int i = 0; i < 3; i++) {                     // larger minimum text grows the box
+            H = 34f * dp + h + 30f * dp + readoutH(s);
+            float s0 = Math.min(1f, Math.min(availW / W, availH / H));    // tube horizontal on screen
+            float s90 = Math.min(1f, Math.min(availW / H, availH / W));   // tube vertical on screen
+            s = s0 + (s90 - s0) * sn * sn;
+        }
 
         c.save();
         c.rotate(u.rotation, cx, cy);
@@ -327,7 +345,7 @@ final class Renderer {
             c.drawRoundRect(rect, r, r, stroke);
         }
 
-        drawReadout(c, p, cx, tubeBot + 30f * dp, W - 24f * dp);
+        drawReadout(c, p, cx, tubeBot + 30f * dp, W - 24f * dp, s);
         c.restore();
         if (active) {
             float hw = Math.max(W * Math.abs((float) Math.cos(Math.toRadians(u.rotation))), H * Math.abs(sn)) * s / 2f;
@@ -336,14 +354,18 @@ final class Renderer {
         }
     }
 
-    /** Caption, big value, secondary line(s). {@code top} is the top of a {@link #readoutH()} block. */
-    private void drawReadout(Canvas c, Palette p, float cx, float top, float maxW) {
-        float capBase = top + 14f * sp;
+    /**
+     * Caption, big value, secondary line(s). {@code top} is the top of a {@link #readoutH} block;
+     * {@code scale} is the canvas scale in force.
+     */
+    private void drawReadout(Canvas c, Palette p, float cx, float top, float maxW, float scale) {
+        float capSz = capSize(scale), secSz = secSize(scale);
+        float capBase = top + capSz * 1.17f;
         float mainBase = capBase + 12f * dp + 47f * sp;
-        float secBase = mainBase + 30f * sp;
+        float secBase = mainBase + 17f * sp + secSz;
 
         text.setTypeface(regular);
-        text.setTextSize(12f * sp);
+        text.setTextSize(capSz);
         boolean capAccent = u.held && !u.calActive;
         text.setColor(col(capAccent ? p.accentText : p.dim));
         c.drawText(u.calActive ? (u.calProgress > 0f && u.calProgress < 1f ? "Hold still" : u.caption) : u.caption,
@@ -386,9 +408,9 @@ final class Renderer {
         text.setTextAlign(Paint.Align.CENTER);
 
         text.setTypeface(regular);
-        text.setTextSize(13f * sp);
+        text.setTextSize(secSz);
         text.setColor(col(u.secondaryAccent ? p.accentText : p.dim));
-        wrapped(c, u.secondary, cx, secBase, maxW, 18f * sp);
+        wrapped(c, u.secondary, cx, secBase, maxW, secSz * 1.38f);
     }
 
     private void drawCalPills(Canvas c, Palette p, float cx, float cy, boolean active) {

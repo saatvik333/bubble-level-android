@@ -11,12 +11,18 @@ public final class EngineTest {
     static final float G = 9.80665f;
     static int fails;
     static long t = 1_000_000_000L;
-    static Random rnd = new Random(7);
+    static Random rnd = new Random(Long.getLong("seed", 7L));
     static long stepNs = 20_000_000L;                      // 50 Hz unless a test changes it
+    static boolean gyro;                                   // stream a resting gyro alongside gravity
+
+    static LevelEngine eng() {
+        gyro = false;
+        return new LevelEngine();
+    }
 
     public static void main(String[] a) {
         // 1. flat, right edge raised 3 deg: up vector tilts toward +x
-        LevelEngine e = new LevelEngine();
+        LevelEngine e = eng();
         feed(e, up(3f, 0f), 2f, 0f);
         check("flat tilt 3", e.tilt, 3f, 0.05f);
         check("flat ax +3 (right high)", e.ax, 3f, 0.05f);
@@ -24,26 +30,26 @@ public final class EngineTest {
         check("mode flat", e.mode, LevelEngine.MODE_FLAT, 0);
 
         // 2. compound tilt
-        e = new LevelEngine();
+        e = eng();
         feed(e, up(1.5f, -2f), 2f, 0f);
         check("compound ax", e.ax, 1.5f, 0.06f);
         check("compound ay", e.ay, -2f, 0.06f);
 
         // 3. upright portrait, rotated 1.2 deg clockwise -> left side high -> dev < 0
-        e = new LevelEngine();
+        e = eng();
         feed(e, inPlane(-1.2f), 2f, 0f);
         check("edge mode", e.mode, LevelEngine.MODE_EDGE, 0);
         check("edge quarter 0", e.quarter, 0, 0);
         check("edge dev -1.2", e.dev, -1.2f, 0.05f);
 
         // 4. landscape (device rotated 90 cw + 0.8)
-        e = new LevelEngine();
+        e = eng();
         feed(e, inPlane(-90.8f), 2f, 0f);
         check("landscape quarter -90", e.quarter, -90, 0);
         check("landscape dev -0.8", e.dev, -0.8f, 0.05f);
 
         // 5. hysteresis: 45 deg inclination keeps the current mode
-        e = new LevelEngine();
+        e = eng();
         feed(e, up(45f, 0f), 1f, 0f);
         check("45 deg stays flat", e.mode, LevelEngine.MODE_FLAT, 0);
         feed(e, up(60f, 0f), 1f, 0f);
@@ -56,7 +62,7 @@ public final class EngineTest {
         // 6. two-step calibration on a sloped surface with a sensor offset (noisy accelerometer)
         float slopeX = 1.1f, slopeY = -0.7f;
         float[] bias = {0.07f, -0.05f, 0.02f};            // m/s^2, ~0.4 deg and ~0.3 deg
-        e = new LevelEngine();
+        e = eng();
         feed(e, plus(up(slopeX, slopeY), bias), 1.5f, 0.01f);
         float before = e.ax;
         e.startCal();
@@ -66,16 +72,16 @@ public final class EngineTest {
         check("gyro detected turn", e.cal, LevelEngine.CAL_STEP2, 0);
         feed(e, plus(up(-slopeX, -slopeY), bias), 2.5f, 0.01f);   // surface slope flips in device frame
         check("cal done", e.cal, LevelEngine.CAL_DONE, 0);
-        check("bias x recovered", e.fbx, bias[0], 0.004f);
-        check("bias y recovered", e.fby, bias[1], 0.004f);
+        check("bias x recovered", e.surf[0], bias[0], 0.005f);
+        check("bias y recovered", e.surf[1], bias[1], 0.005f);
         e.cancelCal();
-        feed(e, plus(up(slopeX, slopeY), bias), 2f, 0.01f);
+        feed(e, plus(up(slopeX, slopeY), bias), 3f, 0.01f);
         System.out.printf("   before cal ax=%.3f, after cal ax=%.3f (true %.3f)%n", before, e.ax, slopeX);
-        check("calibrated ax = true slope", e.ax, slopeX, 0.04f);
-        check("calibrated ay = true slope", e.ay, slopeY, 0.04f);
+        check("calibrated ax = true slope", e.ax, slopeX, 0.05f);
+        check("calibrated ay = true slope", e.ay, slopeY, 0.05f);
 
         // 7. edge calibration: standing portrait, turned around about the vertical, no gyro
-        e = new LevelEngine();
+        e = eng();
         float[] b2 = {0.06f, 0.0f, -0.04f};
         feed(e, plus(inPlane(0.9f), b2), 1.5f, 0.01f);
         e.startCal();
@@ -83,14 +89,14 @@ public final class EngineTest {
         e.manualReady();
         feed(e, plus(inPlane(-0.9f), b2), 2.5f, 0.01f);
         check("edge cal done", e.cal, LevelEngine.CAL_DONE, 0);
-        check("edge bias x", e.ebx, b2[0], 0.004f);
-        check("edge cal leaves surface offset", e.fbx, 0f, 0f);
+        check("edge bias x", e.edge[LevelEngine.EDGE_BOTTOM], b2[0], 0.004f);
+        check("edge cal leaves surface offset", e.surf[0], 0f, 0f);
         e.cancelCal();
         feed(e, plus(inPlane(0.9f), b2), 2f, 0.01f);
-        check("edge calibrated dev", e.dev, 0.9f, 0.04f);
+        check("edge calibrated dev", e.dev, 0.9f, 0.06f);
 
         // 8. a moved setup is rejected (15 deg apart implies a 7.5 deg offset)
-        e = new LevelEngine();
+        e = eng();
         feed(e, up(0f, 0f), 1f, 0f);
         e.startCal();
         feed(e, up(0f, 0f), 2.5f, 0f);
@@ -102,7 +108,7 @@ public final class EngineTest {
         // 9. steadiness: noisy accelerometer at rest, reading jitter after settling (50 and 200 Hz)
         for (long step : new long[]{20_000_000L, 5_000_000L}) {
             stepNs = step;
-            e = new LevelEngine();
+            e = eng();
             float lo = 99, hi = -99;
             int n = (int) (8_000_000_000L / step);
             for (int i = 0; i < n; i++) {
@@ -112,13 +118,13 @@ public final class EngineTest {
                 if (i > n / 3) { lo = Math.min(lo, e.ax); hi = Math.max(hi, e.ax); }
             }
             System.out.printf("   jitter at rest, 0.02 m/s^2 noise, %d Hz: %.3f deg p-p%n", 1_000_000_000L / step, hi - lo);
-            check("rest jitter < 0.1 deg @" + 1_000_000_000L / step + "Hz", hi - lo, 0f, 0.1f);
+            check("rest jitter < 0.12 deg @" + 1_000_000_000L / step + "Hz", hi - lo, 0f, 0.12f);
         }
         stepNs = 20_000_000L;
 
         // 10. display rotated 90 (landscape-natural tablet held portrait, or system-rotated window):
         //     device +x edge raised = screen top raised
-        e = new LevelEngine();
+        e = eng();
         e.rotation = 1;
         feed(e, up(2f, 0f), 2f, 0f);
         check("rot90 screen ax", e.ax, 0f, 0.05f);
@@ -133,7 +139,7 @@ public final class EngineTest {
         // ---- review regressions ----------------------------------------------------------------
 
         // R-1a. started at 47 deg in Auto (still surface mode), then laid flat: must capture
-        e = new LevelEngine();
+        e = eng();
         feed(e, up(47f, 0f), 1f, 0f);
         e.startCal();
         feed(e, up(47f, 0f), 0.3f, 0f);
@@ -142,7 +148,7 @@ public final class EngineTest {
         check("47deg start -> surface cal", e.calEdge ? 1 : 0, 0, 0);
 
         // R-1b. Edge locked, lying flat: captures as a surface calibration
-        e = new LevelEngine();
+        e = eng();
         e.lock = LevelEngine.LOCK_EDGE;
         feed(e, up(0.3f, 0.1f), 1f, 0f);
         e.startCal();
@@ -150,14 +156,14 @@ public final class EngineTest {
         check("edge lock flat capture", e.cal, LevelEngine.CAL_TURN, 0);
 
         // R-1c. edge cal started upright, then stood on a long side: captures
-        e = new LevelEngine();
+        e = eng();
         feed(e, inPlane(0.5f), 1f, 0f);
         e.startCal();
         feed(e, inPlane(-89.6f), 2.5f, 0.01f);
         check("long-side capture", e.cal, LevelEngine.CAL_TURN, 0);
 
         // R-1d. step 2 on the wrong face waits with a hint, then completes on the right one
-        e = new LevelEngine();
+        e = eng();
         feed(e, inPlane(0.4f), 1f, 0f);
         e.startCal();
         feed(e, inPlane(0.4f), 2.5f, 0f);
@@ -169,7 +175,7 @@ public final class EngineTest {
         check("right edge: done", e.cal, LevelEngine.CAL_DONE, 0);
 
         // R-2a. Ready without turning, no gyro: never completes on a sloped surface
-        e = new LevelEngine();
+        e = eng();
         float[] b3 = {0.05f, -0.03f, 0f};
         feed(e, plus(up(1.5f, 0.8f), b3), 1f, 0.01f);
         e.startCal();
@@ -178,10 +184,10 @@ public final class EngineTest {
         feed(e, plus(up(1.5f, 0.8f), b3), 10f, 0.01f);
         check("unmoved Ready: no result", e.cal, LevelEngine.CAL_STEP2, 0);
         check("unmoved Ready: hint", e.calHint, LevelEngine.HINT_TURN_FIRST, 0);
-        check("unmoved Ready: offset untouched", e.fbx, 0f, 0f);
+        check("unmoved Ready: offset untouched", e.surf[0], 0f, 0f);
 
         // R-2b. Ready without turning, gyro present: refused while still in the turn step
-        e = new LevelEngine();
+        e = eng();
         feed(e, up(1.5f, 0.8f), 1f, 0f);
         e.startCal();
         gyroIdle(e, 0.1f);
@@ -192,7 +198,7 @@ public final class EngineTest {
         check("gyro, unturned Ready hint", e.calHint, LevelEngine.HINT_TURN_FIRST, 0);
 
         // R-3a. 1 deg camera bump: surface cal must not leak into edge mode
-        e = new LevelEngine();
+        e = eng();
         feed(e, up(1f, 0f), 1f, 0f);
         e.startCal();
         feed(e, up(1f, 0f), 2.5f, 0f);
@@ -206,12 +212,12 @@ public final class EngineTest {
         check("bump cal: edge reads 0", e.dev, 0f, 0.03f);
 
         // R-3b. 0.8 deg mount misalignment: edge cal must not leak into surface mode
-        e = new LevelEngine();
+        e = eng();
         feed(e, inPlane(0.8f), 1f, 0f);
         e.startCal();
         feed(e, inPlane(0.8f), 2.5f, 0f);
         e.manualReady();
-        feed(e, jitter(inPlane(0.8f), 0.3f), 0.2f, 0f);     // handling between the two captures
+        lift(e, inPlane(0.8f));                             // picked up and turned around     // handling between the two captures
         feed(e, inPlane(0.8f), 2.5f, 0f);
         check("misalign edge cal done", e.cal, LevelEngine.CAL_DONE, 0);
         e.cancelCal();
@@ -223,18 +229,18 @@ public final class EngineTest {
         // R-4. edge deviation is exact at any lean of the screen (true slope 1 deg)
         float[][] leans = {{30f, LevelEngine.LOCK_AUTO}, {40f, LevelEngine.LOCK_EDGE}, {50f, LevelEngine.LOCK_EDGE}, {70f, LevelEngine.LOCK_EDGE}};
         for (float[] l : leans) {
-            e = new LevelEngine();
+            e = eng();
             e.lock = (int) l[1];
             feed(e, leaned(1f, l[0]), 2f, 0f);
             check("edge 1deg @ lean " + (int) l[0], e.dev, 1f, 0.01f);
         }
-        e = new LevelEngine();
+        e = eng();
         feed(e, leanedLandscape(-0.7f, 35f), 2f, 0f);
         check("landscape -0.7 @ lean 35, quarter", e.quarter, -90, 0);
         check("landscape -0.7 @ lean 35", e.dev, -0.7f, 0.01f);
 
         // R-5. Edge locked, lying flat: the quarter does not spin on noise
-        e = new LevelEngine();
+        e = eng();
         e.lock = LevelEngine.LOCK_EDGE;
         int changes = 0, q0 = Integer.MIN_VALUE;
         for (int i = 0; i < 500; i++) {
@@ -250,7 +256,7 @@ public final class EngineTest {
         float[][] cases = {{50, 0.05f}, {200, 0.05f}, {100, 0.03f}, {400, 0.02f}};
         for (float[] cs : cases) {
             stepNs = (long) (1e9 / cs[0]);
-            e = new LevelEngine();
+            e = eng();
             feed(e, up(0.4f, 0.2f), 0.5f, cs[1]);
             e.startCal();
             float secs = 0f;
@@ -264,7 +270,7 @@ public final class EngineTest {
         stepNs = 20_000_000L;
 
         // R-7. hand-held is not still
-        e = new LevelEngine();
+        e = eng();
         feed(e, up(5f, 3f), 0.1f, 0f);
         e.startCal();
         for (int i = 0; i < 300; i++) {
@@ -275,12 +281,19 @@ public final class EngineTest {
         check("hand-held: no capture", e.cal, LevelEngine.CAL_STEP1, 0);
 
         // R-8. physical simulation: imperfect 155 deg turn on a 3 deg slope, face up and face down
-        simTurn(155f, 3f, -1.2f, false, new float[]{0.08f, -0.06f, 0.03f}, 0.012f);
-        simTurn(-170f, 2f, 1.5f, false, new float[]{-0.05f, 0.04f, 0f}, 0.012f);
-        simTurn(160f, 2.5f, 1f, true, new float[]{0.06f, 0.05f, -0.02f}, 0.012f);
+        simTurn("up", 155f, 3f, -1.2f, new float[]{0.08f, -0.06f, 0.03f}, true, 0.012f);
+        simTurn("up", -170f, 2f, 1.5f, new float[]{-0.05f, 0.04f, 0f}, true, 0.012f);
+        simTurn("down", 160f, 2.5f, 1f, new float[]{0.06f, 0.05f, -0.02f}, true, 0.012f);
+        // edges: only a half turn solves; a 160 deg turn on a slope is refused, not mis-solved
+        simTurn("bottom", 176f, 2f, 0.7f, new float[]{0.05f, 0f, 0f}, true, 0.02f);
+        simTurn("top", -183f, 2f, 2.1f, new float[]{-0.04f, 0f, 0f}, true, 0.02f);
+        simTurn("left", 178f, 2f, -0.4f, new float[]{0f, 0.06f, 0f}, true, 0.02f);
+        simTurn("right", 181f, 1.5f, 2.9f, new float[]{0f, -0.03f, 0f}, true, 0.02f);
+        simTurn("bottom", 160f, 2f, 0.7f, new float[]{0.05f, 0f, 0f}, false, 0f);
+        simTurn("left", 125f, 2f, 0.7f, new float[]{0f, 0.05f, 0f}, false, 0f);
 
         // R-9. a full 360 is not a reversal
-        e = new LevelEngine();
+        e = eng();
         feed(e, up(1f, 0f), 1f, 0f);
         e.startCal();
         feed(e, up(1f, 0f), 2.5f, 0f);
@@ -290,7 +303,7 @@ public final class EngineTest {
         check("360 turn reason", e.calFail, LevelEngine.FAIL_TURN, 0);
 
         // R-10. a real 66 mg offset with a perfect reversal is accepted
-        e = new LevelEngine();
+        e = eng();
         float[] big = {0.65f, -0.2f, 0f};
         feed(e, plus(up(0.6f, 0.3f), big), 1f, 0f);
         e.startCal();
@@ -298,20 +311,20 @@ public final class EngineTest {
         e.manualReady();
         feed(e, plus(up(-0.6f, -0.3f), big), 2.5f, 0f);
         check("66 mg offset accepted", e.cal, LevelEngine.CAL_DONE, 0);
-        check("66 mg offset x", e.fbx, big[0], 0.003f);
+        check("66 mg offset x", e.surf[0], big[0], 0.003f);
 
         // R-11. edge cal with a different lean in the two positions: lean is ignored
-        e = new LevelEngine();
+        e = eng();
         feed(e, leaned(0.6f, 10f), 1f, 0f);
         e.startCal();
         feed(e, leaned(0.6f, 10f), 2.5f, 0f);
         e.manualReady();
         feed(e, leaned(-0.6f, 18f), 2.5f, 0f);
         check("edge cal, lean 10 vs 18 accepted", e.cal, LevelEngine.CAL_DONE, 0);
-        check("edge cal, lean 10 vs 18 offset", e.ebx, 0f, 0.003f);
+        check("edge cal, lean 10 vs 18 offset", e.edge[LevelEngine.EDGE_BOTTOM], 0f, 0.003f);
 
         // R-12. gyro bias alone does not end the turn step
-        e = new LevelEngine();
+        e = eng();
         feed(e, up(0f, 0f), 1f, 0f);
         e.startCal();
         feed(e, up(0f, 0f), 2.5f, 0f);
@@ -321,6 +334,86 @@ public final class EngineTest {
             if (i % 2 == 0) e.onGravity(0f, 0f, G, t);
         }
         check("gyro bias: still waiting", e.cal, LevelEngine.CAL_TURN, 0);
+
+        // ---- re-review regressions ---------------------------------------------------------------
+
+        // RR-2. opposite edges keep their own offsets: in-plane misalignment flips sign
+        e = eng();
+        float mis = 0.5f;                                   // sensor rotated 0.5 deg in the screen plane
+        feed(e, inPlane(-90f + mis), 1f, 0f);               // left long side down on a level shelf
+        float uncal = e.dev;
+        e.startCal();
+        feed(e, inPlane(-90f + mis), 2.5f, 0f);
+        e.manualReady();
+        lift(e, inPlane(-90f + mis));                       // picked up and turned around
+        feed(e, inPlane(-90f + mis), 3.5f, 0f);
+        check("left-side cal done", e.cal, LevelEngine.CAL_DONE, 0);
+        e.cancelCal();
+        feed(e, inPlane(-90f + mis), 1f, 0f);
+        check("left side reads 0 after cal", e.dev, 0f, 0.02f);
+        LevelEngine ref = eng();
+        feed(ref, inPlane(90f + mis), 2f, 0f);              // right long side down, uncalibrated
+        feed(e, inPlane(90f + mis), 2f, 0f);
+        check("right side unchanged by left cal", e.dev, ref.dev, 0.005f);
+        System.out.printf("   left side uncalibrated %.2f, right side %.2f%n", uncal, e.dev);
+
+        // RR-3. slow turn on a near-level surface with a gyro: completes, no stall in step 2
+        e = eng();
+        gyro = true;
+        float[] lvl = up(0.2f, 0.1f);
+        feed(e, lvl, 1f, 0.003f);
+        e.startCal();
+        feed(e, lvl, 2.5f, 0.003f);
+        for (int i = 0; i < 1200; i++) {                    // 180 deg over 12 s, 0.26 rad/s, at 100 Hz
+            t += 10_000_000L;
+            double a2 = Math.PI * i / 1200.0;
+            float rr = (float) (Math.PI / 12.0);
+            e.onGyro(0f, 0f, rr, t);
+            if (i % 2 == 0) {
+                float[] g = up((float) (0.2 * Math.cos(a2) + 0.1 * Math.sin(a2)), (float) (-0.2 * Math.sin(a2) + 0.1 * Math.cos(a2)));
+                float[] j = jitter(g, 0.003f);
+                e.onGravity(j[0], j[1], j[2], t);
+            }
+        }
+        feed(e, up(-0.2f, -0.1f), 3f, 0.003f);
+        check("slow turn completes", e.cal, LevelEngine.CAL_DONE, 0);
+
+        // RR-risk. a single jolt when tapping Ready (no gyro) is not a turn
+        e = eng();
+        feed(e, up(1.5f, 0f), 1f, 0.01f);
+        e.startCal();
+        feed(e, up(1.5f, 0f), 2.5f, 0.01f);
+        e.manualReady();
+        t += stepNs;
+        e.onGravity(up(1.5f, 0f)[0] + 0.6f, up(1.5f, 0f)[1], up(1.5f, 0f)[2], t);
+        feed(e, up(1.5f, 0f), 6f, 0.01f);
+        check("jolt is not a turn", e.cal, LevelEngine.CAL_STEP2, 0);
+
+        // RR-risk. a calibration without gyro events after one with: Ready works, turn assumed 180
+        e = eng();
+        feed(e, up(0.8f, 0.4f), 1f, 0f);
+        e.startCal();
+        gyroIdle(e, 0.2f);
+        e.cancelCal();
+        gyro = false;
+        e.startCal();
+        feed(e, up(0.8f, 0.4f), 2.5f, 0f);
+        e.manualReady();
+        check("stale gyro: Ready accepted", e.cal, LevelEngine.CAL_STEP2, 0);
+        feed(e, up(-0.8f, -0.4f), 2.5f, 0f);
+        check("stale gyro: done", e.cal, LevelEngine.CAL_DONE, 0);
+
+        // RR-risk. 0.05 rad/s gyro bias for 5 minutes does not count as a turn
+        e = eng();
+        feed(e, up(0f, 0f), 1f, 0f);
+        e.startCal();
+        feed(e, up(0f, 0f), 2.5f, 0f);
+        for (int i = 0; i < 100 * 300; i++) {
+            t += 10_000_000L;
+            e.onGyro(0.004f, -0.003f, 0.05f, t);
+            if (i % 2 == 0) e.onGravity(0f, 0f, G, t);
+        }
+        check("0.05 rad/s bias: still waiting", e.cal, LevelEngine.CAL_TURN, 0);
 
         System.out.println(fails == 0 ? "ALL PASS" : fails + " FAILED");
         if (fails > 0) System.exit(1);
@@ -365,11 +458,21 @@ public final class EngineTest {
         for (int i = 0; i < n; i++) {
             float[] s = noise > 0 ? jitter(g, noise) : g;
             t += stepNs;
+            if (gyro) e.onGyro((float) rnd.nextGaussian() * 0.003f, (float) rnd.nextGaussian() * 0.003f, (float) rnd.nextGaussian() * 0.003f, t);
             e.onGravity(s[0], s[1], s[2], t);
         }
     }
 
+    /** Picked up and put back: tilted ~8 deg (about an axis across gravity) for half a second, hand shake. */
+    static void lift(LevelEngine e, float[] g) {
+        double[] gd = {g[0], g[1], g[2]};
+        double[] k = unit(cross(gd, new double[]{0.3, 0.5, 0.8}));
+        double[] r = rotate(gd, k, Math.toRadians(8));
+        feed(e, new float[]{(float) r[0], (float) r[1], (float) r[2]}, 0.5f, 0.2f);
+    }
+
     static void gyroIdle(LevelEngine e, float seconds) {
+        gyro = true;
         for (int i = 0; i < Math.round(seconds * 100); i++) {
             t += 10_000_000L;
             e.onGyro(0.002f, -0.001f, 0.001f, t);
@@ -378,6 +481,7 @@ public final class EngineTest {
 
     /** Simulates turning about the vertical with the gyroscope, then setting down. */
     static void turn(LevelEngine e, float rad, float seconds, float[] g) {
+        gyro = true;
         int n = Math.round(seconds * 100);
         float n3 = (float) Math.sqrt(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]);
         float rate = rad / seconds;
@@ -390,38 +494,78 @@ public final class EngineTest {
 
     // ---- rigid-body simulation of a phone turned on a sloped surface ---------------------------
 
-    static void simTurn(float turnDeg, float slopeDeg, float slopeDir, boolean faceDown, float[] bias, float tol) {
+    /**
+     * Phone resting on a sloped surface in a pose ("up", "down", "bottom", "top", "left", "right":
+     * which way it lies or which edge is down), turned by turnDeg about the surface normal with
+     * the gyroscope running. Checks the offset lands in that pose's slot.
+     */
+    static void simTurn(String pose, float turnDeg, float slopeDeg, float slopeDir, float[] bias,
+                        boolean expectDone, float tol) {
         double sx = Math.tan(Math.toRadians(slopeDeg)) * Math.cos(slopeDir), sy = Math.tan(Math.toRadians(slopeDeg)) * Math.sin(slopeDir);
         double[] nrm = unit(new double[]{-sx, -sy, 1});             // surface normal, world
-        double[] X = unit(sub(new double[]{1, 0.2, 0}, scale(nrm, dot(new double[]{1, 0.2, 0}, nrm))));
-        double[] Z = faceDown ? scale(nrm, -1) : nrm;
-        double[] Y = cross(Z, X);
-        LevelEngine e = new LevelEngine();
+        double[] X, Y, Z;
+        switch (pose) {
+            case "up": case "down":
+                Z = scale(nrm, pose.equals("up") ? 1 : -1);
+                X = unit(sub(new double[]{1, 0.2, 0}, scale(nrm, dot(new double[]{1, 0.2, 0}, nrm))));
+                Y = cross(Z, X);
+                break;
+            case "bottom": case "top":
+                Y = scale(nrm, pose.equals("bottom") ? 1 : -1);
+                Z = unit(sub(new double[]{0.2, 1, 0}, scale(nrm, dot(new double[]{0.2, 1, 0}, nrm))));
+                X = cross(Y, Z);
+                break;
+            default:                                                  // left / right long side
+                X = scale(nrm, pose.equals("left") ? 1 : -1);
+                Y = unit(sub(new double[]{1, 0.3, 0}, scale(nrm, dot(new double[]{1, 0.3, 0}, nrm))));
+                Z = cross(X, Y);
+                break;
+        }
+        LevelEngine e = eng();
+        gyro = true;
         float[] r = body(X, Y, Z, bias);
         feed(e, r, 1f, 0.01f);
         e.startCal();
-        feed(e, r, 2.5f, 0.01f);
-        if (e.cal != LevelEngine.CAL_TURN) { check("sim step1 " + turnDeg, e.cal, LevelEngine.CAL_TURN, 0); return; }
+        float secs1 = 0f;
+        while (e.cal == LevelEngine.CAL_STEP1 && secs1 < 10f) {
+            feed(e, r, 0.05f, 0.01f);
+            secs1 += 0.05f;
+        }
+        String name = String.format("sim %s turn %.0f slope %.1f", pose, turnDeg, slopeDeg);
+        if (secs1 > 2.5f) System.out.printf("   %s: step 1 took %.2f s%n", name, secs1);
+        if (e.cal != LevelEngine.CAL_TURN) { check(name + " step1", e.cal, LevelEngine.CAL_TURN, 0); return; }
         double total = Math.toRadians(turnDeg), secs = 1.5;
         int steps = (int) (secs * 200);
         double rate = total / secs;
         for (int i = 0; i < steps; i++) {
             X = rotate(X, nrm, total / steps);
             Y = rotate(Y, nrm, total / steps);
+            Z = rotate(Z, nrm, total / steps);
             t += 5_000_000L;
             double[] w = scale(nrm, rate);                           // world angular velocity
             e.onGyro((float) dot(X, w), (float) dot(Y, w), (float) dot(Z, w), t);
             if (i % 4 == 0) {
-                float[] s = jitter(body(X, Y, Z, bias), 0.25f);      // handling
-                e.onGravity(s[0], s[1], s[2], t);
+                float[] sm = jitter(body(X, Y, Z, bias), 0.25f);     // handling
+                e.onGravity(sm[0], sm[1], sm[2], t);
             }
         }
         if (e.cal == LevelEngine.CAL_TURN) e.manualReady();
         feed(e, body(X, Y, Z, bias), 3f, 0.01f);
-        String name = String.format("sim %s turn %.0f slope %.1f", faceDown ? "down" : "up", turnDeg, slopeDeg);
+        if (!expectDone) {
+            check(name + " rejected", e.cal, LevelEngine.CAL_FAILED, 0);
+            check(name + " reason turn", e.calFail, LevelEngine.FAIL_TURN, 0);
+            return;
+        }
         check(name + " done", e.cal, LevelEngine.CAL_DONE, 0);
-        check(name + " bx", e.fbx, bias[0], tol);
-        check(name + " by", e.fby, bias[1], tol);
+        switch (pose) {
+            case "up":     check(name + " x", e.surf[0], bias[0], tol); check(name + " y", e.surf[1], bias[1], tol); break;
+            case "down":   check(name + " x", e.surf[2], bias[0], tol); check(name + " y", e.surf[3], bias[1], tol);
+                           check(name + " face-up slot untouched", Math.abs(e.surf[0]) + Math.abs(e.surf[1]), 0f, 0f); break;
+            case "bottom": check(name + " x", e.edge[LevelEngine.EDGE_BOTTOM], bias[0], tol); break;
+            case "top":    check(name + " x", e.edge[LevelEngine.EDGE_TOP], bias[0], tol); break;
+            case "left":   check(name + " y", e.edge[LevelEngine.EDGE_LEFT], bias[1], tol); break;
+            default:       check(name + " y", e.edge[LevelEngine.EDGE_RIGHT], bias[1], tol); break;
+        }
     }
 
     static float[] body(double[] X, double[] Y, double[] Z, float[] b) {

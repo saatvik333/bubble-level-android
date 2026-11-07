@@ -23,7 +23,8 @@ final class Settings {
     // Calibration belongs to this phone's sensor: kept in a no-backup file, not in the preferences,
     // so cloud backup and device-to-device transfer never carry it to another phone.
     boolean calibrated;
-    float fbx, fby, ebx, eby;
+    final float[] surf = new float[4];      // see LevelEngine.surf
+    final float[] edge = new float[4];      // see LevelEngine.edge
 
     void load(SharedPreferences p) {
         theme = p.getString("theme", theme);
@@ -48,21 +49,29 @@ final class Settings {
                 .apply();
     }
 
-    private static final int CAL_VERSION = 2;
+    private static final int CAL_VERSION = 3;
+
+    void clearCalibration() {
+        calibrated = false;
+        for (int i = 0; i < 4; i++) surf[i] = edge[i] = 0f;
+    }
 
     void loadCalibration(File f) {
-        calibrated = false;
-        fbx = fby = ebx = eby = 0f;
+        clearCalibration();
         if (!f.isFile()) return;
+        float[] v = new float[8];
         try (DataInputStream in = new DataInputStream(new FileInputStream(f))) {
             if (in.readInt() != CAL_VERSION) return;
-            float a = in.readFloat(), b = in.readFloat(), c = in.readFloat(), d = in.readFloat();
-            if (!(ok(a) && ok(b) && ok(c) && ok(d))) return;
-            fbx = a; fby = b; ebx = c; eby = d;
-            calibrated = in.readBoolean();
+            for (int i = 0; i < 8; i++) {
+                v[i] = in.readFloat();
+                if (!ok(v[i])) return;
+            }
+            boolean cal = in.readBoolean();
+            System.arraycopy(v, 0, surf, 0, 4);
+            System.arraycopy(v, 4, edge, 0, 4);
+            calibrated = cal;
         } catch (IOException e) {
-            calibrated = false;
-            fbx = fby = ebx = eby = 0f;
+            clearCalibration();
         }
     }
 
@@ -70,10 +79,8 @@ final class Settings {
         File tmp = new File(f.getPath() + ".tmp");
         try (DataOutputStream out = new DataOutputStream(new FileOutputStream(tmp))) {
             out.writeInt(CAL_VERSION);
-            out.writeFloat(fbx);
-            out.writeFloat(fby);
-            out.writeFloat(ebx);
-            out.writeFloat(eby);
+            for (float v : surf) out.writeFloat(v);
+            for (float v : edge) out.writeFloat(v);
             out.writeBoolean(calibrated);
         } catch (IOException e) {
             tmp.delete();

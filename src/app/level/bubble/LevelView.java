@@ -474,10 +474,8 @@ final class LevelView extends View {
         }
         if ((ev & LevelEngine.EV_DONE) != 0) {
             buzz(true);
-            settings.fbx = engine.fbx;
-            settings.fby = engine.fby;
-            settings.ebx = engine.ebx;
-            settings.eby = engine.eby;
+            System.arraycopy(engine.surf, 0, settings.surf, 0, 4);
+            System.arraycopy(engine.edge, 0, settings.edge, 0, 4);
             settings.calibrated = true;
             ui.calibrated = true;
             host.onCalibrationChanged();
@@ -562,8 +560,10 @@ final class LevelView extends View {
     }
 
     private String failText() {
-        return engine.calFail == LevelEngine.FAIL_TURN ? "Turn it about 180° between the two steps"
-                : "Readings too far apart. Keep it on the same spot";
+        if (engine.calFail == LevelEngine.FAIL_TURN) {
+            return engine.calEdge ? "Turn it to face exactly the other way" : "Turn it about 180° between the two steps";
+        }
+        return "Readings too far apart. Keep it on the same spot";
     }
 
     private void updateGyro(boolean on) {
@@ -692,9 +692,8 @@ final class LevelView extends View {
                 changed = true;
                 break;
             case Renderer.H_RESET:
-                settings.calibrated = false;
-                settings.fbx = settings.fby = settings.ebx = settings.eby = 0f;
-                engine.fbx = engine.fby = engine.ebx = engine.eby = 0f;
+                settings.clearCalibration();
+                for (int i = 0; i < 4; i++) engine.surf[i] = engine.edge[i] = 0f;
                 engine.refresh();
                 changed = true;
                 calChanged = true;
@@ -764,8 +763,10 @@ final class LevelView extends View {
 
     private void a11yAfterFrame() {
         if (am == null || !am.isEnabled()) return;
+        a11y.prune();
         int sig = 17;
         for (int i = 0; i < ui.hitCount; i++) sig = sig * 31 + ui.hits[i].id;
+        if (page == 1) sig = sig * 31 + Math.round(ui.settingsScroll / ui.dp);   // bounds moved
         if (sig != hitSig) {
             hitSig = sig;
             ViewParent parent = getParent();
@@ -814,6 +815,17 @@ final class LevelView extends View {
                 AccessibilityNodeInfo info = AccessibilityNodeInfo.obtain(LevelView.this);
                 onInitializeAccessibilityNodeInfo(info);
                 for (int i = 0; i < ui.hitCount; i++) info.addChild(LevelView.this, ui.hits[i].id);
+                if (scrollable()) {
+                    // settings rows below the fold are reached by scrolling, like a ScrollView
+                    info.setClassName("android.widget.ScrollView");
+                    info.setScrollable(true);
+                    if (ui.settingsScroll > 0f) {
+                        info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_BACKWARD);
+                    }
+                    if (ui.settingsScroll < ui.settingsMaxScroll) {
+                        info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_FORWARD);
+                    }
+                }
                 return info;
             }
             Ui.Hit h = ui.find(id);
@@ -849,7 +861,21 @@ final class LevelView extends View {
 
         @Override
         public boolean performAction(int id, int action, Bundle args) {
-            if (id == HOST_VIEW_ID) return performAccessibilityAction(action, args);
+            if (id == HOST_VIEW_ID) {
+                if (scrollable() && (action == AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+                        || action == AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)) {
+                    float pageH = Math.max(48f * ui.dp, (ui.height - ui.insetB - ui.insetT - 56f * ui.dp) * 0.8f);
+                    float to = clamp(ui.settingsScroll
+                            + (action == AccessibilityNodeInfo.ACTION_SCROLL_FORWARD ? pageH : -pageH),
+                            0f, ui.settingsMaxScroll);
+                    if (to == ui.settingsScroll) return false;
+                    ui.settingsScroll = to;
+                    invalidate();
+                    sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_SCROLLED);
+                    return true;
+                }
+                return performAccessibilityAction(action, args);
+            }
             if (ui.find(id) == null) return false;
             switch (action) {
                 case AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS:
@@ -873,6 +899,16 @@ final class LevelView extends View {
                 default:
                     return false;
             }
+        }
+
+        private boolean scrollable() {
+            return page == 1 && ui.settingsMaxScroll > 0f;
+        }
+
+        /** Forgets focus/hover on targets that are no longer on screen. */
+        void prune() {
+            if (focused != NONE && ui.find(focused) == null) focused = NONE;
+            if (hovered != NONE && ui.find(hovered) == null) hovered = NONE;
         }
 
         boolean onHover(MotionEvent e) {
