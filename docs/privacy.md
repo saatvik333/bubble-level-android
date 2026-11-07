@@ -40,4 +40,4 @@ If this policy changes, the new version will be published at this address with a
 
 ## Contact
 
-Saatvik Sharma — [saatvik333sharma@gmail.com](mailto:saatvik333sharma@gmail.com)
+Saatvik Sharma, [saatvik333sharma@gmail.com](mailto:saatvik333sharma@gmail.com)
