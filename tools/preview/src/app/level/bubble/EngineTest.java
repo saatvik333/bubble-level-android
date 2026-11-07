@@ -337,25 +337,23 @@ public final class EngineTest {
 
         // ---- re-review regressions ---------------------------------------------------------------
 
-        // RR-2. opposite edges keep their own offsets: in-plane misalignment flips sign
+        // RR-2. per-pose slots. A plain bias carries to the opposite edge until that edge is
+        //       calibrated itself; then an in-plane misalignment (sign flips) is exact on both.
         e = eng();
-        float mis = 0.5f;                                   // sensor rotated 0.5 deg in the screen plane
-        feed(e, inPlane(-90f + mis), 1f, 0f);               // left long side down on a level shelf
-        float uncal = e.dev;
-        e.startCal();
-        feed(e, inPlane(-90f + mis), 2.5f, 0f);
-        e.manualReady();
-        lift(e, inPlane(-90f + mis));                       // picked up and turned around
-        feed(e, inPlane(-90f + mis), 3.5f, 0f);
-        check("left-side cal done", e.cal, LevelEngine.CAL_DONE, 0);
-        e.cancelCal();
-        feed(e, inPlane(-90f + mis), 1f, 0f);
-        check("left side reads 0 after cal", e.dev, 0f, 0.02f);
-        LevelEngine ref = eng();
-        feed(ref, inPlane(90f + mis), 2f, 0f);              // right long side down, uncalibrated
-        feed(e, inPlane(90f + mis), 2f, 0f);
-        check("right side unchanged by left cal", e.dev, ref.dev, 0.005f);
-        System.out.printf("   left side uncalibrated %.2f, right side %.2f%n", uncal, e.dev);
+        float[] by = {0f, 0.1f, 0f};                        // 0.1 m/s^2 bias on y, level shelf
+        calEdgeNoGyro(e, plus(inPlane(-90f), by));          // left long side down (up = -x? see slots)
+        check("bias: calibrated side reads 0", e.dev, 0f, 0.02f);
+        feed(e, plus(inPlane(90f), by), 2f, 0f);            // the other long side
+        check("bias: opposite side borrows the offset", e.dev, 0f, 0.02f);
+        e = eng();
+        float mis = 0.5f;                                   // sensor turned 0.5 deg in the screen plane
+        calEdgeNoGyro(e, inPlane(-90f + mis));
+        check("misalign: first side reads 0", e.dev, 0f, 0.02f);
+        calEdgeNoGyro(e, inPlane(90f + mis));
+        check("misalign: second side reads 0", e.dev, 0f, 0.02f);
+        feed(e, inPlane(-90f + mis), 2f, 0f);
+        check("misalign: first side still 0", e.dev, 0f, 0.02f);
+        check("two edge slots set", Integer.bitCount(e.calMask >> 2), 2, 0);
 
         // RR-3. slow turn on a near-level surface with a gyro: completes, no stall in step 2
         e = eng();
@@ -402,6 +400,63 @@ public final class EngineTest {
         check("stale gyro: Ready accepted", e.cal, LevelEngine.CAL_STEP2, 0);
         feed(e, up(-0.8f, -0.4f), 2.5f, 0f);
         check("stale gyro: done", e.cal, LevelEngine.CAL_DONE, 0);
+
+        // RR-risk. a 3-sample (60 ms) sideways jolt when tapping Ready is not a turn (no gyro)
+        e = eng();
+        feed(e, up(1.5f, 0f), 1f, 0.01f);
+        e.startCal();
+        feed(e, up(1.5f, 0f), 2.5f, 0.01f);
+        e.manualReady();
+        for (int i = 0; i < 3; i++) {
+            t += stepNs;
+            e.onGravity(up(1.5f, 0f)[0] + 0.7f, up(1.5f, 0f)[1], up(1.5f, 0f)[2], t);
+        }
+        feed(e, up(1.5f, 0f), 6f, 0.01f);
+        check("3-sample jolt is not a turn", e.cal, LevelEngine.CAL_STEP2, 0);
+
+        // RR-risk. gyro bias measured in step 1: a slow final nudge still counts toward the turn
+        e = eng();
+        float[] gb = {0.004f, -0.03f, 0.05f};               // rad/s, a poor gyro
+        float[] up0 = inPlane(0.3f);
+        for (int i = 0; i < 50; i++) { t += stepNs; e.onGyro(gb[0], gb[1], gb[2], t); e.onGravity(up0[0], up0[1], up0[2], t); }
+        e.startCal();
+        int i1 = 0;
+        while (e.cal == LevelEngine.CAL_STEP1 && i1++ < 500) {
+            t += stepNs;
+            e.onGyro(gb[0] + (float) rnd.nextGaussian() * 0.002f, gb[1], gb[2], t);
+            e.onGravity(up0[0], up0[1], up0[2], t);
+        }
+        // 168 deg quickly, then the last 12 deg at 2.5 deg/s, about the vertical (device y)
+        float done = 0f;
+        float[] g2 = inPlane(0.3f);
+        while (done < Math.PI - 0.0001) {
+            float rate = done < Math.toRadians(168) ? 2f : (float) Math.toRadians(2.5);
+            float step = Math.min(rate * 0.01f, (float) Math.PI - done);
+            done += step;
+            t += 10_000_000L;
+            e.onGyro(gb[0], gb[1] + step / 0.01f, gb[2], t);
+            if ((t / 10_000_000L) % 2 == 0) {
+                float[] gr = done < Math.PI / 2 ? jitter(g2, 0.3f) : jitter(inPlane(-0.3f), 0.05f);
+                e.onGravity(gr[0], gr[1], gr[2], t);
+            }
+        }
+        if (e.cal == LevelEngine.CAL_TURN) e.manualReady();
+        float[] dn = inPlane(-0.3f);
+        for (int i = 0; i < 200; i++) { t += stepNs; e.onGyro(gb[0], gb[1], gb[2], t); e.onGravity(dn[0], dn[1], dn[2], t); }
+        check("slow final nudge, bias known: done", e.cal, LevelEngine.CAL_DONE, 0);
+
+        // RR-risk. 0.05 rad/s gyro bias, measured in step 1, for 5 minutes: not a turn
+        e = eng();
+        feed(e, up(0f, 0f), 1f, 0f);
+        e.startCal();
+        int i2 = 0;
+        while (e.cal == LevelEngine.CAL_STEP1 && i2++ < 500) { t += stepNs; e.onGyro(0.004f, -0.003f, 0.05f, t); e.onGravity(0f, 0f, G, t); }
+        for (int i = 0; i < 100 * 300; i++) {
+            t += 10_000_000L;
+            e.onGyro(0.004f, -0.003f, 0.05f + (float) rnd.nextGaussian() * 0.002f, t);
+            if (i % 2 == 0) e.onGravity(0f, 0f, G, t);
+        }
+        check("known 0.05 rad/s bias: still waiting", e.cal, LevelEngine.CAL_TURN, 0);
 
         // RR-risk. 0.05 rad/s gyro bias for 5 minutes does not count as a turn
         e = eng();
@@ -461,6 +516,19 @@ public final class EngineTest {
             if (gyro) e.onGyro((float) rnd.nextGaussian() * 0.003f, (float) rnd.nextGaussian() * 0.003f, (float) rnd.nextGaussian() * 0.003f, t);
             e.onGravity(s[0], s[1], s[2], t);
         }
+    }
+
+    /** Edge calibration without a gyroscope: capture, pick up and turn, capture, back to idle. */
+    static void calEdgeNoGyro(LevelEngine e, float[] g) {
+        feed(e, g, 1f, 0f);
+        e.startCal();
+        feed(e, g, 2.5f, 0f);
+        e.manualReady();
+        lift(e, g);
+        feed(e, g, 3.5f, 0f);                               // level shelf: same reading after the turn
+        check("edge cal done", e.cal, LevelEngine.CAL_DONE, 0);
+        e.cancelCal();
+        feed(e, g, 1f, 0f);
     }
 
     /** Picked up and put back: tilted ~8 deg (about an axis across gravity) for half a second, hand shake. */

@@ -89,6 +89,16 @@ public final class Preview {
         settings(u);
         shot(r, u, out + "/n3_narrow_settings.png");
 
+        u = sized("Celeste", 360, 370, 2.625f, 1f, 24, 0);
+        u.modeT = 1f; turnStep(u); u.secondary = "Turn it to face the other way, same edge down";
+        shot(r, u, out + "/s7_split_edge_turn.png");
+        u = sized("Ambra", 914, 412, 2.625f, 1f, 24, 24);
+        u.modeT = 1f; u.main = "0.4°"; u.secondary = "Left side low"; u.caption = "Edge";
+        shot(r, u, out + "/l2_landscape_edge.png");
+        u = sized("Rosa", 412, 914, 2.625f, 1f, 32, 24);
+        settings(u); u.calSummary = "face up, face down, 4 edges";
+        shot(r, u, out + "/9_settings_summary.png");
+
         // landscape window (large screen ignoring the portrait request)
         u = sized("Aurum", 914, 412, 2.625f, 1f, 24, 24);
         u.bubX = -0.3f; u.bubY = 0.2f; u.main = "3.1°"; u.secondary = "X  −2.6°     Y  −1.7°"; u.caption = "Surface";

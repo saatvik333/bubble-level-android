@@ -22,7 +22,8 @@ final class Settings {
     boolean keepOn = true;
     // Calibration belongs to this phone's sensor: kept in a no-backup file, not in the preferences,
     // so cloud backup and device-to-device transfer never carry it to another phone.
-    boolean calibrated;
+    boolean calibrated;                     // calMask != 0
+    int calMask;                            // see LevelEngine.calMask
     final float[] surf = new float[4];      // see LevelEngine.surf
     final float[] edge = new float[4];      // see LevelEngine.edge
 
@@ -49,10 +50,11 @@ final class Settings {
                 .apply();
     }
 
-    private static final int CAL_VERSION = 3;
+    private static final int CAL_VERSION = 4;
 
     void clearCalibration() {
         calibrated = false;
+        calMask = 0;
         for (int i = 0; i < 4; i++) surf[i] = edge[i] = 0f;
     }
 
@@ -66,10 +68,11 @@ final class Settings {
                 v[i] = in.readFloat();
                 if (!ok(v[i])) return;
             }
-            boolean cal = in.readBoolean();
+            int mask = in.readInt() & 0x3F;
             System.arraycopy(v, 0, surf, 0, 4);
             System.arraycopy(v, 4, edge, 0, 4);
-            calibrated = cal;
+            calMask = mask;
+            calibrated = mask != 0;
         } catch (IOException e) {
             clearCalibration();
         }
@@ -81,7 +84,7 @@ final class Settings {
             out.writeInt(CAL_VERSION);
             for (float v : surf) out.writeFloat(v);
             for (float v : edge) out.writeFloat(v);
-            out.writeBoolean(calibrated);
+            out.writeInt(calMask);
         } catch (IOException e) {
             tmp.delete();
             return;

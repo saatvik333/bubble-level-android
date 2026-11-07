@@ -46,6 +46,7 @@ public final class MainActivity extends Activity implements SensorEventListener,
         engine.lock = settings.lock;
         System.arraycopy(settings.surf, 0, engine.surf, 0, 4);
         System.arraycopy(settings.edge, 0, engine.edge, 0, 4);
+        engine.calMask = settings.calMask;
         engine.rotation = display.getRotation();
 
         sensors = (SensorManager) getSystemService(SENSOR_SERVICE);

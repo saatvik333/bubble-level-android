@@ -183,7 +183,7 @@ final class Renderer {
         drawReadout(c, p, cx, y0 + dd + gap, (usable - 48f * dp) / s, s);
         c.restore();
         if (active) {
-            float hw = Math.max(dd / 2f, (usable - 48f * dp) / 2f) * s;
+            float hw = Math.max(dd * s, usable - 48f * dp) / 2f;
             hit(H_READOUT, cx - hw, y0, cx + hw, y0 + blockH * s, 0, 0, -1f);
         }
     }
@@ -258,24 +258,26 @@ final class Renderer {
     }
 
     private void drawEdge(Canvas c, Palette p, float top, float area, boolean active, boolean primary) {
-        // The instrument turns with the device. Its content box (tube on top, readout below) keeps
-        // one size in every orientation and is scaled down when the turned box would not fit.
-        // While not calibrating the empty pill row is free space too.
+        // The instrument turns with the device: tube on top, readout below, in a box whose
+        // length follows the screen room along the tube and whose depth is scaled to the room
+        // across it. Both follow the (animated) rotation. While not calibrating the empty pill
+        // row is free space too.
         float availH = area + (u.calActive ? 0f : 48f * dp);
         float cx = cx0, cy = top + availH / 2f;
         float availW = Math.max(1f, usable - 32f * dp);
-        // Tube length follows the shorter side, so turning the tube upright never squeezes it much.
-        float W = Math.min(availW, Math.max(availH, 160f * dp));
-        float L = W * 0.88f;
-        float h = clamp(L * 0.15f, 44f * dp, 68f * dp);
         float sn = (float) Math.sin(Math.toRadians(u.rotation));
+        float cs = (float) Math.cos(Math.toRadians(u.rotation));
+        float along = availW + (availH - availW) * sn * sn;
+        float across = availH + (availW - availH) * sn * sn;
+        float T = Math.max(1f, Math.min(along, 520f * dp));          // on-screen box length
+        float h = clamp(T * 0.88f * 0.15f, 44f * dp, 68f * dp);
         float s = 1f, H = 0f;
         for (int i = 0; i < 3; i++) {                     // larger minimum text grows the box
             H = 34f * dp + h + 30f * dp + readoutH(s);
-            float s0 = Math.min(1f, Math.min(availW / W, availH / H));    // tube horizontal on screen
-            float s90 = Math.min(1f, Math.min(availW / H, availH / W));   // tube vertical on screen
-            s = s0 + (s90 - s0) * sn * sn;
+            s = Math.min(1f, across / H);
         }
+        float W = T / s;                                  // virtual length: the tube keeps its screen length
+        float L = W * 0.88f;
 
         c.save();
         c.rotate(u.rotation, cx, cy);
@@ -348,8 +350,8 @@ final class Renderer {
         drawReadout(c, p, cx, tubeBot + 30f * dp, W - 24f * dp, s);
         c.restore();
         if (active) {
-            float hw = Math.max(W * Math.abs((float) Math.cos(Math.toRadians(u.rotation))), H * Math.abs(sn)) * s / 2f;
-            float hh = Math.max(H * Math.abs((float) Math.cos(Math.toRadians(u.rotation))), W * Math.abs(sn)) * s / 2f;
+            float hw = Math.max(T * Math.abs(cs), H * s * Math.abs(sn)) / 2f;
+            float hh = Math.max(H * s * Math.abs(cs), T * Math.abs(sn)) / 2f;
             hit(H_READOUT, cx - hw, cy - hh, cx + hw, cy + hh, 0, 0, -1f);
         }
     }
@@ -474,7 +476,7 @@ final class Renderer {
         y += rh;
         toggleRow(c, p, "Keep screen on", u.keepOnT, y, rh, H_KEEPON, active);
         y += rh;
-        rowLabel(c, p, "Calibration", y);
+        rowLabel(c, p, u.calSummary.length() > 0 ? "Calibration · " + u.calSummary : "Calibration", y);
         float cy = controlY(y, rh);
         if (u.calibrated) {
             pill(c, p, "Reset", cx, cy, H_RESET, active, false, usable - 24f * dp);
@@ -511,7 +513,7 @@ final class Renderer {
         text.setTypeface(regular);
         text.setTextSize(13f * sp);
         text.setColor(col(p.fg, 0.9f));
-        c.drawText(label, cx0, y + 14f * sp, text);
+        fitLine(c, label, cx0, y + 14f * sp, usable - 32f * dp);
     }
 
     private void selectorRow(Canvas c, Palette p, String label, String value, float y, float rh,

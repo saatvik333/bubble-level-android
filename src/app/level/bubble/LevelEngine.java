@@ -47,8 +47,9 @@ final class LevelEngine {
     private static final float TURN_MIN = 2.1f, TURN_MAX = 4.2f;   // accepted measured turn, 120..240 deg
     private static final float NOT_TURNED = 0.8f;         // < ~45 deg measured: Ready is refused
     private static final float EDGE_TURN_TOL = 0.15f;     // rad (~9 deg): edges only solve for a 180 turn
-    private static final float GYRO_DEAD = 0.06f;         // rad/s, ignores residual gyro bias
-    private static final long GYRO_LIVE_NS = 1_000_000_000L;
+    private static final float GYRO_DEAD = 0.06f;         // rad/s, dead zone while the gyro bias is unknown
+    private static final float GYRO_DEAD_KNOWN = 0.015f;  // rad/s, once the bias was measured in step 1
+    private static final float GAP_TAU = 1.0f;            // s, resting statistics of the step gate
     private static final float MOVED_RAD = 0.02f;         // ~1.1 deg away from the step 1 reading
     private static final float MOVED_GYRO = 0.3f;         // rad/s
 
@@ -62,6 +63,12 @@ final class LevelEngine {
      */
     final float[] edge = new float[4];
     static final int EDGE_BOTTOM = 0, EDGE_TOP = 1, EDGE_LEFT = 2, EDGE_RIGHT = 3;
+    /**
+     * Which slots hold a measurement: bit 0 face up, bit 1 face down, bit 2 + i edge i. A pose
+     * without one borrows its opposite (face up/down, bottom/top, left/right): same axis, so a
+     * plain sensor bias carries over, which is the usual and larger part of an offset.
+     */
+    int calMask;
     int rotation;                  // Surface.ROTATION_0..3 of the display the UI is drawn on
 
     // filter state
@@ -77,6 +84,7 @@ final class LevelEngine {
     private float ax0, ay0, az0;
     private float ux, uy, uz;          // previous raw unit vector
     private float noise2;              // mean square of successive raw unit differences, rad^2 (= 4 sigma^2)
+    private float gap2 = 1e-6f;        // resting mean square of the step gate's gap, rad^2
     private long anchorNs;
     private boolean still;
     private float gyroMag;
@@ -97,6 +105,10 @@ final class LevelEngine {
     private int calAxis = -1, calSign;
     private float yaw;
     private boolean moved;
+    private double gbx, gby, gbz;      // gyro samples while still in step 1, for its bias
+    private int gbn;
+    private float biasX, biasY, biasZ;
+    private boolean biasKnown;
     private double sx, sy, sz;
     private int sn;
     private long captureStartNs = -1;
@@ -139,11 +151,14 @@ final class LevelEngine {
             float inst = angle(px, py, pz, opx, opy, opz) / dt;
             speed += (inst - speed) * (1f - (float) Math.exp(-dt / SPEED_TAU));
             float k = clamp((speed - SPEED_DEAD) / SPEED_FULL, 0f, 1f);
-            // Step gate: when the pre-filtered direction sits well outside the noise band around
+            // Step gate: when the pre-filtered direction sits well outside its usual distance from
             // the output (a bump, a shim under a leg), open the filter until it has caught up.
-            float sigmaP = sigma * (float) Math.sqrt(dt / (2f * PRE_TAU));
+            // "Usual" is learned from the gap itself, so correlated noise (a vibrating surface)
+            // raises the threshold instead of opening the gate. A step only grows it slowly.
             float gap = angle(px, py, pz, fx, fy, fz);
-            k = Math.max(k, clamp((gap - 4f * sigmaP - 0.0003f) / 0.002f, 0f, 1f));
+            float thr = 3f * (float) Math.sqrt(gap2) + 0.0003f;
+            k = Math.max(k, clamp((gap - thr) / 0.002f, 0f, 1f));
+            gap2 += (Math.min(gap * gap, 16f * gap2 + 1e-8f) - gap2) * (1f - (float) Math.exp(-dt / GAP_TAU));
             float tau = 0.50f + (0.05f - 0.50f) * k;
             float a = 1f - (float) Math.exp(-dt / tau);
             fx += (rx - fx) * a;
@@ -159,7 +174,7 @@ final class LevelEngine {
                 ly += (qy - ly) * al;
                 lz += (qz - lz) * al;
             }
-            float am = 1f - (float) Math.exp(-dt / 0.1f);
+            float am = 1f - (float) Math.exp(-dt / 0.25f);
             mx0 += (qx - mx0) * am;
             my0 += (qy - my0) * am;
             mz0 += (qz - mz0) * am;
@@ -194,11 +209,16 @@ final class LevelEngine {
         lastGyroNs = ns;
         gyroSeen = true;
         gyroMag = (float) Math.sqrt(wx * wx + wy * wy + wz * wz);
+        if (cal == CAL_STEP1 && still) {
+            gbx += wx; gby += wy; gbz += wz;
+            gbn++;
+        }
         if ((cal == CAL_TURN || cal == CAL_STEP2) && has) {
             if (gyroMag > MOVED_GYRO) moved = true;
             float n = (float) Math.sqrt(fx * fx + fy * fy + fz * fz);
-            float w = (wx * fx + wy * fy + wz * fz) / n;      // rotation rate about the vertical
-            if (Math.abs(w) > GYRO_DEAD) yaw += w * dt;
+            // rotation rate about the vertical, bias removed when it was measured
+            float w = ((wx - biasX) * fx + (wy - biasY) * fy + (wz - biasZ) * fz) / n;
+            if (Math.abs(w) > (biasKnown ? GYRO_DEAD_KNOWN : GYRO_DEAD)) yaw += w * dt;
             if (Math.abs(yaw) > NOT_TURNED) moved = true;
             if (cal == CAL_TURN && Math.abs(yaw) > TURN_RAD) enterStep2();
         }
@@ -223,13 +243,13 @@ final class LevelEngine {
         boolean flatPose = lock == LOCK_AUTO ? mode == MODE_FLAT : incl < 45f;
         float dx = fx, dy = fy;
         if (flatPose) {
-            int f = fz >= 0f ? 0 : 2;
-            dx -= surf[f];
-            dy -= surf[f + 1];
+            int f = slot(fz >= 0f ? 0 : 1, 0);
+            dx -= surf[2 * f];
+            dy -= surf[2 * f + 1];
         } else if (Math.abs(fy) >= Math.abs(fx)) {
-            dx -= edge[fy >= 0f ? EDGE_BOTTOM : EDGE_TOP];     // x runs along the edge
+            dx -= edge[slot(fy >= 0f ? EDGE_BOTTOM : EDGE_TOP, 2)];     // x runs along the edge
         } else {
-            dy -= edge[fx >= 0f ? EDGE_LEFT : EDGE_RIGHT];     // y runs along the edge
+            dy -= edge[slot(fx >= 0f ? EDGE_LEFT : EDGE_RIGHT, 2)];     // y runs along the edge
         }
         float gz = fz;
 
@@ -276,6 +296,10 @@ final class LevelEngine {
         moved = false;
         yaw = 0f;
         gyroSeen = false;                 // re-established by this calibration's own gyro events
+        gbx = gby = gbz = 0;
+        gbn = 0;
+        biasX = biasY = biasZ = 0f;
+        biasKnown = false;
         resetCapture();
     }
 
@@ -288,7 +312,7 @@ final class LevelEngine {
     /** Manual fallback for "I have turned it around" (no gyroscope, or a turn the gyro missed). */
     void manualReady() {
         if (cal != CAL_TURN) return;
-        if (gyroLive() && Math.abs(yaw) < NOT_TURNED) {
+        if (gyroSeen && Math.abs(yaw) < NOT_TURNED) {
             calHint = HINT_TURN_FIRST;
             return;
         }
@@ -339,6 +363,12 @@ final class LevelEngine {
             calAxis = dominantAxis(mx, my, mz);
             calSign = component(mx, my, mz, calAxis) >= 0 ? 1 : -1;
             calEdge = calAxis != 2;
+            if (gbn >= 20) {
+                biasX = (float) (gbx / gbn);
+                biasY = (float) (gby / gbn);
+                biasZ = (float) (gbz / gbn);
+                biasKnown = true;
+            }
             cal = CAL_TURN;
             moved = false;
             yaw = 0f;
@@ -348,7 +378,9 @@ final class LevelEngine {
         }
 
         // step 2
-        boolean gyro = gyroLive();
+        // A gyro seen in this calibration decides the turn, even if its events stopped since:
+        // the yaw it integrated is then incomplete, and refusing is the safe outcome.
+        boolean gyro = gyroSeen;
         float turn = gyro ? Math.abs(yaw) : (float) Math.PI;
         boolean ok2;
         if (gyro && (turn < TURN_MIN || turn > TURN_MAX
@@ -366,9 +398,10 @@ final class LevelEngine {
             float nbx = c1x - tx, nby = c1y - ty;
             ok2 = Math.abs(nbx) <= MAX_BIAS && Math.abs(nby) <= MAX_BIAS;
             if (ok2) {
-                int f = calSign > 0 ? 0 : 2;
-                surf[f] = nbx;
-                surf[f + 1] = nby;
+                int f = calSign > 0 ? 0 : 1;
+                surf[2 * f] = nbx;
+                surf[2 * f + 1] = nby;
+                calMask |= 1 << f;
             }
         } else {
             // On an edge only the axis along the edge is solvable (the lean is not world-fixed),
@@ -379,6 +412,7 @@ final class LevelEngine {
                 int slot = calAxis == 1 ? (calSign > 0 ? EDGE_BOTTOM : EDGE_TOP)
                         : (calSign > 0 ? EDGE_LEFT : EDGE_RIGHT);
                 edge[slot] = nb;
+                calMask |= 1 << (2 + slot);
             }
         }
         if (ok2) {
@@ -397,9 +431,11 @@ final class LevelEngine {
         calProgress = 1f;
     }
 
-    /** Gyro events arrived recently (a sensor that stopped is treated as absent). */
-    private boolean gyroLive() {
-        return gyroSeen && Math.abs(lastNs - lastGyroNs) < GYRO_LIVE_NS;
+    /** The slot to apply for pose {@code i} (bit {@code base + i}): its own, else its opposite's. */
+    private int slot(int i, int base) {
+        if ((calMask & (1 << (base + i))) != 0) return i;
+        if ((calMask & (1 << (base + (i ^ 1)))) != 0) return i ^ 1;
+        return i;
     }
 
     // ---- helpers -----------------------------------------------------------------------------

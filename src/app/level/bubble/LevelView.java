@@ -476,8 +476,9 @@ final class LevelView extends View {
             buzz(true);
             System.arraycopy(engine.surf, 0, settings.surf, 0, 4);
             System.arraycopy(engine.edge, 0, settings.edge, 0, 4);
-            settings.calibrated = true;
-            ui.calibrated = true;
+            settings.calMask = engine.calMask;
+            settings.calibrated = engine.calMask != 0;
+            syncSettingsUi(false);
             host.onCalibrationChanged();
             calEndNs = now;
             announce("Calibrated");
@@ -694,6 +695,7 @@ final class LevelView extends View {
             case Renderer.H_RESET:
                 settings.clearCalibration();
                 for (int i = 0; i < 4; i++) engine.surf[i] = engine.edge[i] = 0f;
+                engine.calMask = 0;
                 engine.refresh();
                 changed = true;
                 calChanged = true;
@@ -731,12 +733,23 @@ final class LevelView extends View {
         ui.tolLabel = String.format(Locale.US, "± %.1f°", tol);
         ui.modeLabel = Settings.LOCKS[settings.lock];
         ui.calibrated = settings.calibrated;
+        ui.calSummary = calSummary(settings.calMask);
         ui.guideLabels = settings.units == 0;
         if (snap) {
             ui.hapticsT = settings.haptics ? 1f : 0f;
             ui.keepOnT = settings.keepOn ? 1f : 0f;
         }
         dirty = true;
+    }
+
+    /** "face up, 2 edges" style list of the calibrated poses, empty when none. */
+    static String calSummary(int mask) {
+        StringBuilder b = new StringBuilder();
+        if ((mask & 1) != 0) b.append("face up");
+        if ((mask & 2) != 0) b.append(b.length() > 0 ? ", " : "").append("face down");
+        int edges = Integer.bitCount((mask >> 2) & 0xF);
+        if (edges > 0) b.append(b.length() > 0 ? ", " : "").append(edges).append(edges == 1 ? " edge" : " edges");
+        return b.toString();
     }
 
     private void buzz(boolean strong) {
@@ -796,7 +809,7 @@ final class LevelView extends View {
             case Renderer.H_MODE_NEXT: return "Mode " + ui.modeLabel + ". Next";
             case Renderer.H_HAPTIC: return "Haptic feedback";
             case Renderer.H_KEEPON: return "Keep screen on";
-            case Renderer.H_RESET: return "Reset calibration";
+            case Renderer.H_RESET: return "Reset calibration. Calibrated: " + ui.calSummary;
             case Renderer.H_CAL_CANCEL: return "Cancel calibration";
             case Renderer.H_CAL_READY: return "Ready, it is turned around";
             default: return "";
@@ -814,6 +827,7 @@ final class LevelView extends View {
             if (id == HOST_VIEW_ID) {
                 AccessibilityNodeInfo info = AccessibilityNodeInfo.obtain(LevelView.this);
                 onInitializeAccessibilityNodeInfo(info);
+                if (page == 1) info.setContentDescription("Settings");
                 for (int i = 0; i < ui.hitCount; i++) info.addChild(LevelView.this, ui.hits[i].id);
                 if (scrollable()) {
                     // settings rows below the fold are reached by scrolling, like a ScrollView

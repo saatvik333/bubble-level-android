@@ -33,6 +33,7 @@ final class Ui {
     // settings page
     String unitsLabel = "", tolLabel = "", modeLabel = "";
     boolean calibrated;
+    String calSummary = "";      // calibrated poses, e.g. "face up, 1 edge"
     float hapticsT, keepOnT;
     float settingsScroll;        // px, written by LevelView
     float settingsMaxScroll;     // px, written by Renderer
