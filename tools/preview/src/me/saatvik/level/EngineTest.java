@@ -1,4 +1,4 @@
-package app.level.bubble;
+package me.saatvik.level;
 
 import java.util.Random;
 

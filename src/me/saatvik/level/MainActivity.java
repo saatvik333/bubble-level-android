@@ -1,4 +1,4 @@
-package app.level.bubble;
+package me.saatvik.level;
 
 import android.app.Activity;
 import android.content.SharedPreferences;
@@ -15,12 +15,12 @@ import android.os.Bundle;
 import android.view.Display;
 import android.view.View;
 import android.view.Window;
+import android.view.WindowInsetsController;
 import android.view.WindowManager;
+import android.window.OnBackInvokedCallback;
+import android.window.OnBackInvokedDispatcher;
 
 import java.io.File;
-import java.lang.reflect.InvocationHandler;
-import java.lang.reflect.Method;
-import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 
 public final class MainActivity extends Activity implements SensorEventListener, LevelView.Host {
@@ -33,8 +33,8 @@ public final class MainActivity extends Activity implements SensorEventListener,
     private final LevelEngine engine = new LevelEngine();
     private LevelView view;
     private Display display;
-    private Object backCallback;
-    private boolean backRegistered, backUnavailable;
+    private OnBackInvokedCallback backCallback;
+    private boolean backRegistered;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -87,56 +87,32 @@ public final class MainActivity extends Activity implements SensorEventListener,
         settings.save(prefs);
     }
 
-    /** Android 15 and below: legacy back dispatch. */
+    /** Before Android 13: legacy back dispatch. */
     @Override
     public void onBackPressed() {
         if (!view.handleBack()) super.onBackPressed();
     }
 
     /**
-     * Android 16+ with targetSdk 36 no longer calls onBackPressed. A callback is registered only
-     * while the view has something to close (settings page, calibration), so at the top level the
-     * system keeps its predictive back-to-home animation. OnBackInvokedCallback (API 33) is not in
-     * the API 23 stubs this compiles against, hence the dynamic proxy.
+     * Android 13+ (enableOnBackInvokedCallback): onBackPressed is no longer called. A callback is
+     * registered only while the view has something to close (settings page, calibration), so at
+     * the top level the system keeps its predictive back-to-home animation.
      */
     @Override
     public void setBackIntercept(boolean on) {
-        if (Build.VERSION.SDK_INT < 36 || on == backRegistered || backUnavailable) return;
-        try {
-            Class<?> cbType = Class.forName("android.window.OnBackInvokedCallback");
-            Class<?> dispType = Class.forName("android.window.OnBackInvokedDispatcher");
-            Object dispatcher = Activity.class.getMethod("getOnBackInvokedDispatcher").invoke(this);
-            if (backCallback == null) {
-                backCallback = Proxy.newProxyInstance(cbType.getClassLoader(), new Class<?>[]{cbType},
-                        new InvocationHandler() {
-                            @Override
-                            public Object invoke(Object proxy, Method m, Object[] args) {
-                                switch (m.getName()) {
-                                    case "onBackInvoked":
-                                        if (!view.handleBack()) setBackIntercept(false);
-                                        return null;
-                                    case "equals":
-                                        return proxy == args[0];
-                                    case "hashCode":
-                                        return System.identityHashCode(proxy);
-                                    case "toString":
-                                        return "LevelBackCallback";
-                                    default:
-                                        return null;
-                                }
-                            }
-                        });
-            }
-            if (on) {
-                dispType.getMethod("registerOnBackInvokedCallback", int.class, cbType)
-                        .invoke(dispatcher, 0 /* PRIORITY_DEFAULT */, backCallback);
-            } else {
-                dispType.getMethod("unregisterOnBackInvokedCallback", cbType).invoke(dispatcher, backCallback);
-            }
-            backRegistered = on;
-        } catch (Exception e) {
-            backUnavailable = true;   // platform default: back closes the activity; don't retry every frame
+        if (Build.VERSION.SDK_INT < 33 || on == backRegistered) return;
+        OnBackInvokedDispatcher dispatcher = getOnBackInvokedDispatcher();
+        if (backCallback == null) {
+            backCallback = () -> {
+                if (!view.handleBack()) setBackIntercept(false);
+            };
         }
+        if (on) {
+            dispatcher.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT, backCallback);
+        } else {
+            dispatcher.unregisterOnBackInvokedCallback(backCallback);
+        }
+        backRegistered = on;
     }
 
     @Override
@@ -205,17 +181,12 @@ public final class MainActivity extends Activity implements SensorEventListener,
             w.setNavigationBarColor(lightBars ? 0x66000000 : 0);
         }
         if (Build.VERSION.SDK_INT >= 30) {
-            try {
-                Object ctl = Window.class.getMethod("getInsetsController").invoke(w);
-                if (ctl != null) {
-                    int mask = 8 | 16;   // APPEARANCE_LIGHT_STATUS_BARS | APPEARANCE_LIGHT_NAVIGATION_BARS
-                    Method m = Class.forName("android.view.WindowInsetsController")
-                            .getMethod("setSystemBarsAppearance", int.class, int.class);
-                    m.invoke(ctl, lightBars ? mask : 0, mask);
-                    return;
-                }
-            } catch (Exception ignored) {
-                // fall through to legacy flags
+            WindowInsetsController ctl = w.getInsetsController();
+            if (ctl != null) {
+                int mask = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                        | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+                ctl.setSystemBarsAppearance(lightBars ? mask : 0, mask);
+                return;
             }
         }
         View decor = w.getDecorView();
@@ -236,30 +207,20 @@ public final class MainActivity extends Activity implements SensorEventListener,
             w.setNavigationBarColor(0);
         }
         if (Build.VERSION.SDK_INT >= 29) {
-            invoke(w, "setNavigationBarContrastEnforced", boolean.class, false);
-            invoke(w, "setStatusBarContrastEnforced", boolean.class, false);
+            w.setNavigationBarContrastEnforced(false);
+            w.setStatusBarContrastEnforced(false);
         }
         if (Build.VERSION.SDK_INT >= 28) {
-            try {
-                WindowManager.LayoutParams lp = w.getAttributes();
-                WindowManager.LayoutParams.class.getField("layoutInDisplayCutoutMode").setInt(lp, 1); // SHORT_EDGES
-                w.setAttributes(lp);
-            } catch (Exception ignored) {
-            }
+            WindowManager.LayoutParams lp = w.getAttributes();
+            lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+            w.setAttributes(lp);
         }
         if (Build.VERSION.SDK_INT >= 30) {
-            invoke(w, "setDecorFitsSystemWindows", boolean.class, false);
+            w.setDecorFitsSystemWindows(false);
         } else {
             w.getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE
                     | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
                     | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
-        }
-    }
-
-    private static void invoke(Object target, String name, Class<?> type, Object arg) {
-        try {
-            target.getClass().getMethod(name, type).invoke(target, arg);
-        } catch (Exception ignored) {
         }
     }
 
@@ -273,29 +234,20 @@ public final class MainActivity extends Activity implements SensorEventListener,
         return list.toArray(new Palette[0]);
     }
 
-    /** Material You colours on Android 12+, read by name so the app compiles against API 23. */
+    /** Material You colours on Android 12+. */
     private Palette wallpaperPalette() {
         if (Build.VERSION.SDK_INT < 31) return null;
-        try {
-            boolean night = (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK)
-                    == Configuration.UI_MODE_NIGHT_YES;
-            if (night) {
-                return new Palette("Wallpaper", true,
-                        sys("system_neutral1_900"), sys("system_neutral1_100"), sys("system_neutral2_400"),
-                        sys("system_neutral2_700"), sys("system_accent1_200"), sys("system_accent1_800"));
-            }
-            return new Palette("Wallpaper", false,
-                    sys("system_neutral1_10"), sys("system_neutral1_800"), sys("system_neutral2_600"),
-                    sys("system_neutral2_100"), sys("system_accent1_600"), sys("system_accent1_0"));
-        } catch (RuntimeException e) {
-            return null;
+        boolean night = (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK)
+                == Configuration.UI_MODE_NIGHT_YES;
+        if (night) {
+            return new Palette("Wallpaper", true,
+                    getColor(android.R.color.system_neutral1_900), getColor(android.R.color.system_neutral1_100),
+                    getColor(android.R.color.system_neutral2_400), getColor(android.R.color.system_neutral2_700),
+                    getColor(android.R.color.system_accent1_200), getColor(android.R.color.system_accent1_800));
         }
-    }
-
-    private int sys(String name) {
-        Resources r = Resources.getSystem();
-        int id = r.getIdentifier(name, "color", "android");
-        if (id == 0) throw new Resources.NotFoundException(name);
-        return getColor(id);
+        return new Palette("Wallpaper", false,
+                getColor(android.R.color.system_neutral1_10), getColor(android.R.color.system_neutral1_800),
+                getColor(android.R.color.system_neutral2_600), getColor(android.R.color.system_neutral2_100),
+                getColor(android.R.color.system_accent1_600), getColor(android.R.color.system_accent1_0));
     }
 }

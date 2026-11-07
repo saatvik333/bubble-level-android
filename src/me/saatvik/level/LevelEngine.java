@@ -1,4 +1,4 @@
-package app.level.bubble;
+package me.saatvik.level;
 
 /**
  * Sensor math, free of Android dependencies so it can be exercised on a plain JVM.

@@ -1,4 +1,4 @@
-package app.level.bubble;
+package me.saatvik.level;
 
 /**
  * Colour tokens. Every surface in the app is drawn from these six values:

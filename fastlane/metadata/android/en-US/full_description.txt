@@ -1,0 +1,20 @@
+A bubble level with one instrument and one number on the screen.
+
+Lay your phone flat and it's a bullseye level for shelves, tables and floors. Stand it on an edge and it turns into a tube level for picture frames, walls and door frames. It switches between the two by itself and rotates the tube so it stays level with the world, whichever way up you hold the phone.
+
+<b>Calibrate on any firm surface</b>
+Calibration doesn't need a perfectly flat table. Take a reading, turn the phone around and take a second one. The two readings cancel out the slope of whatever the phone is resting on, which leaves only the error of its own sensor. When you calibrate lying flat on a phone with a gyroscope, the app measures how far you actually turned, so a rough half-turn still gives an exact result. Flat and edge readings are calibrated separately, because a camera bump or a rounded edge tilts each one differently.
+
+<b>Reading it</b>
+• Degrees, percent, mm/m or in/ft
+• Choose how close counts as level, from ±0.1° to ±1°. The phone gives a short vibration when you get there.
+• Tap to hold the reading, then pick the phone up to read it
+• Lock it to flat or edge mode when you need to
+• The screen stays on while you work (you can turn this off)
+• Six colour themes, plus one that matches your wallpaper on Android 12 and later. Swipe sideways to change.
+• Works with TalkBack and Switch Access
+
+<b>Privacy</b>
+The app has no ads, accounts or analytics. It doesn't have permission to use the internet, so nothing you do in it leaves your phone.
+
+Source code: https://github.com/saatvik333/level-android

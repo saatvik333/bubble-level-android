@@ -1,10 +1,12 @@
-package app.level.bubble;
+package me.saatvik.level;
 
 import android.content.Context;
 import android.graphics.Canvas;
+import android.graphics.Insets;
 import android.graphics.Rect;
 import android.os.Build;
 import android.os.Bundle;
+import android.view.DisplayCutout;
 import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
 import android.view.View;
@@ -150,34 +152,25 @@ final class LevelView extends View {
 
     @Override
     public WindowInsets onApplyWindowInsets(WindowInsets in) {
-        int l = in.getSystemWindowInsetLeft(), t = in.getSystemWindowInsetTop();
-        int r = in.getSystemWindowInsetRight(), b = in.getSystemWindowInsetBottom();
+        int l, t, r, b;
         if (Build.VERSION.SDK_INT >= 30) {
             // system bars + display cutout; the deprecated getters leave the cutout out
-            try {
-                Class<?> type = Class.forName("android.view.WindowInsets$Type");
-                int mask = (Integer) type.getMethod("systemBars").invoke(null)
-                        | (Integer) type.getMethod("displayCutout").invoke(null);
-                Object ins = WindowInsets.class.getMethod("getInsets", int.class).invoke(in, mask);
-                Class<?> ic = ins.getClass();
-                l = ic.getField("left").getInt(ins);
-                t = ic.getField("top").getInt(ins);
-                r = ic.getField("right").getInt(ins);
-                b = ic.getField("bottom").getInt(ins);
-            } catch (Exception ignored) {
-                // keep the legacy values
-            }
-        } else if (Build.VERSION.SDK_INT >= 28) {
-            try {
-                Object cut = WindowInsets.class.getMethod("getDisplayCutout").invoke(in);
-                if (cut != null) {
-                    Class<?> cc = cut.getClass();
-                    l = Math.max(l, (Integer) cc.getMethod("getSafeInsetLeft").invoke(cut));
-                    t = Math.max(t, (Integer) cc.getMethod("getSafeInsetTop").invoke(cut));
-                    r = Math.max(r, (Integer) cc.getMethod("getSafeInsetRight").invoke(cut));
-                    b = Math.max(b, (Integer) cc.getMethod("getSafeInsetBottom").invoke(cut));
-                }
-            } catch (Exception ignored) {
+            Insets ins = in.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+            l = ins.left;
+            t = ins.top;
+            r = ins.right;
+            b = ins.bottom;
+        } else {
+            l = in.getSystemWindowInsetLeft();
+            t = in.getSystemWindowInsetTop();
+            r = in.getSystemWindowInsetRight();
+            b = in.getSystemWindowInsetBottom();
+            DisplayCutout cut = Build.VERSION.SDK_INT >= 28 ? in.getDisplayCutout() : null;
+            if (cut != null) {
+                l = Math.max(l, cut.getSafeInsetLeft());
+                t = Math.max(t, cut.getSafeInsetTop());
+                r = Math.max(r, cut.getSafeInsetRight());
+                b = Math.max(b, cut.getSafeInsetBottom());
             }
         }
         ui.insetL = l;
@@ -755,7 +748,7 @@ final class LevelView extends View {
     private void buzz(boolean strong) {
         if (!settings.haptics) return;
         int c;
-        if (strong) c = Build.VERSION.SDK_INT >= 30 ? 16 /* CONFIRM */ : HapticFeedbackConstants.VIRTUAL_KEY;
+        if (strong) c = Build.VERSION.SDK_INT >= 30 ? HapticFeedbackConstants.CONFIRM : HapticFeedbackConstants.VIRTUAL_KEY;
         else c = HapticFeedbackConstants.KEYBOARD_TAP;
         performHapticFeedback(c);
     }
