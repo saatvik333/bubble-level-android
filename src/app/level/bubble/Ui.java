@@ -34,6 +34,11 @@ final class Ui {
     String unitsLabel = "", tolLabel = "", modeLabel = "";
     boolean calibrated;
     float hapticsT, keepOnT;
+    float settingsScroll;        // px, written by LevelView
+    float settingsMaxScroll;     // px, written by Renderer
+
+    // written by Renderer for LevelView: on-screen bubble travel of the instrument shown, px
+    float travelPx = 1f;
 
     // interaction
     int pressedId;

@@ -7,11 +7,25 @@ cd "$(dirname "$0")"
 SDK=${ANDROID_SDK:-/usr/lib/android-sdk}
 BT=$SDK/build-tools/debian
 JAR=$SDK/platforms/android-23/android.jar
-VERSION_CODE=${VERSION_CODE:-1}
-VERSION_NAME=${VERSION_NAME:-1.0}
+VERSION_CODE=${VERSION_CODE:-2}
+VERSION_NAME=${VERSION_NAME:-1.1}
 KS=${KEYSTORE:-keystore/level.jks}
-KS_PASS=${KEYSTORE_PASS:-levelkey}
 OUT=build
+
+# Signing: the key must stay the same for every build that should install over a previous one.
+# It is never generated silently; NEW_KEYSTORE=1 creates one on purpose.
+: "${KEYSTORE_PASS:?set KEYSTORE_PASS to the keystore password}"
+if [ ! -f "$KS" ]; then
+    if [ "${NEW_KEYSTORE:-0}" != 1 ]; then
+        echo "error: keystore $KS not found." >&2
+        echo "Restore it, or run with NEW_KEYSTORE=1 to create a new key (a new key cannot update installs signed with the old one)." >&2
+        exit 1
+    fi
+    mkdir -p "$(dirname "$KS")"
+    keytool -genkeypair -keystore "$KS" -storetype PKCS12 -alias level -keyalg RSA -keysize 3072 \
+        -validity 10000 -storepass:env KEYSTORE_PASS -keypass:env KEYSTORE_PASS -dname "CN=Level" 2>/dev/null
+    echo "created $KS - back it up; it signs every future update"
+fi
 
 rm -rf "$OUT"
 mkdir -p "$OUT/flat" "$OUT/gen" "$OUT/classes" "$OUT/dex"
@@ -37,12 +51,7 @@ cp "$OUT/res.apk" "$OUT/unsigned.apk"
 (cd "$OUT/dex" && zip -q -X ../unsigned.apk classes.dex)
 zipalign -p -f 4 "$OUT/unsigned.apk" "$OUT/aligned.apk"
 
-if [ ! -f "$KS" ]; then
-    mkdir -p "$(dirname "$KS")"
-    keytool -genkeypair -keystore "$KS" -storetype PKCS12 -alias level -keyalg RSA -keysize 3072 \
-        -validity 10000 -storepass "$KS_PASS" -keypass "$KS_PASS" -dname "CN=Level" 2>/dev/null
-fi
-apksigner sign --ks "$KS" --ks-pass "pass:$KS_PASS" --ks-key-alias level \
+apksigner sign --ks "$KS" --ks-pass env:KEYSTORE_PASS --ks-key-alias level \
     --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true \
     --out "$OUT/Level.apk" "$OUT/aligned.apk"
 apksigner verify "$OUT/Level.apk"

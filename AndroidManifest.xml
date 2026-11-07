@@ -3,6 +3,8 @@
     package="app.level.bubble">
 
     <uses-feature android:name="android.hardware.sensor.accelerometer" android:required="true" />
+    <!-- screenOrientation="portrait" would otherwise imply a required portrait screen on Play -->
+    <uses-feature android:name="android.hardware.screen.portrait" android:required="false" />
 
     <application
         android:allowBackup="true"

@@ -7,42 +7,66 @@ package app.level.bubble;
  * pointing away from the earth, as reported by TYPE_GRAVITY / TYPE_ACCELEROMETER.
  * Optional input: gyroscope (rad/s, device coordinates), used only while calibrating.
  *
- * Filtering: adaptive one-pole low-pass. Time constant shrinks while the device moves (responsive)
- * and grows while it rests (steady last digit).
+ * Filtering: adaptive one-pole low-pass, defined in time rather than per sample so behaviour does
+ * not depend on the delivery rate. The time constant shrinks while the device moves (responsive)
+ * and grows while it rests (steady last digit). Motion is judged on a lightly pre-filtered vector,
+ * so sensor noise alone does not open the filter.
  *
  * Calibration: two-position reversal. A sensor offset b is fixed in the device frame, while the
- * surface slope t flips sign in the two horizontal device axes when the device is turned 180 degrees
- * about the vertical. Averaging both readings cancels t and leaves b:  b = (g1 + g2) / 2 on the two
- * non-vertical axes. Works on a surface that is not level.
+ * surface slope t turns with the device when it is rotated about the vertical. Two readings
+ * r1 = b + t and r2 = b + R(phi) t give t = (I - R(phi))^-1 (r1 - r2) and b = r1 - t; with
+ * phi = 180 degrees this is b = (r1 + r2) / 2. Works on a surface that is not level.
+ *
+ * The offset depends on the pose (a camera bump tilts the phone lying flat, an edge has its own
+ * geometry), so surface and edge calibrations are kept apart and applied only in their own pose.
  */
 final class LevelEngine {
     static final int MODE_FLAT = 0, MODE_EDGE = 1;
     static final int LOCK_AUTO = 0, LOCK_FLAT = 1, LOCK_EDGE = 2;
     static final int CAL_IDLE = 0, CAL_STEP1 = 1, CAL_TURN = 2, CAL_STEP2 = 3, CAL_DONE = 4, CAL_FAILED = 5;
     static final int EV_CAPTURE = 1, EV_DONE = 2, EV_FAILED = 4;
+    static final int HINT_NONE = 0, HINT_TURN_FIRST = 1, HINT_WRONG_SIDE = 2;
+    static final int FAIL_NONE = 0, FAIL_OFFSET = 1, FAIL_TURN = 2;
 
     private static final float RAD = (float) (180.0 / Math.PI);
-    private static final float STILL_RAD = 0.0035f;       // ~0.2 deg drift allowed while "still"
-    private static final long STILL_NS = 450_000_000L;    // must stay inside that cone this long
+    private static final float PRE_TAU = 0.05f;           // s, pre-filter for the motion estimate
+    private static final float SPEED_TAU = 0.15f;
+    private static final float SPEED_DEAD = 0.05f;        // rad/s of apparent motion that noise alone produces
+    private static final float SPEED_FULL = 0.45f;        // above dead zone: filter fully open
+    private static final float STILL_TAU = 0.15f;         // s, smoothing of the stillness vector
+    private static final float NOISE_TAU = 0.2f;
+    private static final float NOISE_CAP = 2f * 0.03f * 0.03f;   // a jolt counts as "not still", not as hours of noise
+    private static final float SNAP_RAD = 0.06f;          // ~3.4 deg, far above sensor noise
+    private static final float STILL_RAD = 0.0035f;       // ~0.2 deg: minimum drift cone while "still"
+    private static final float STILL_NOISE_MAX = 0.008f;  // rad per axis; above this it is hand-held
+    private static final long STILL_NS = 450_000_000L;    // must stay inside the cone this long
     private static final long CAPTURE_NS = 1_200_000_000L;
-    private static final float MAX_BIAS = 0.6f;           // m/s^2, ~3.5 deg; larger means the setup moved
-    private static final float TURN_RAD = 2.6f;           // ~150 deg of yaw counts as "turned around"
+    private static final float MAX_BIAS = 1.0f;           // m/s^2, ~6 deg; larger means the setup moved
+    private static final float TURN_RAD = 2.6f;           // ~150 deg of yaw: advance to step 2 on its own
+    private static final float TURN_MIN = 2.1f, TURN_MAX = 4.2f;   // accepted measured turn, 120..240 deg
+    private static final float NOT_TURNED = 0.8f;         // < ~45 deg measured: Ready is refused
+    private static final float GYRO_DEAD = 0.03f;         // rad/s, ignores residual gyro bias
+    private static final float MOVED_RAD = 0.02f;         // ~1.1 deg away from the step 1 reading
+    private static final float MOVED_NOISE = 0.012f;      // handling shakes the reading this much
+    private static final float MOVED_GYRO = 0.3f;         // rad/s
 
     // configuration
     int lock = LOCK_AUTO;
-    float bx, by, bz;              // sensor offset, device frame
+    float fbx, fby;                // surface offset (x, y), device frame, m/s^2
+    float ebx, eby;                // edge offset along the edge: x when standing upright, y when on a long side
     int rotation;                  // Surface.ROTATION_0..3 of the display the UI is drawn on
 
     // filter state
     private boolean has;
     private long lastNs;
-    private float fx, fy, fz;          // filtered raw gravity (bias not removed)
-    private float ux, uy, uz;          // previous raw unit vector
+    private float fx, fy, fz;          // filtered raw gravity (offset not removed)
+    private float px, py, pz;          // pre-filtered unit vector, motion estimate only
     private float speed;               // smoothed angular speed, rad/s
 
-    // stillness detector: anchor cone
-    private float ax0, ay0, az0;
+    // stillness detector: smoothed vector inside a cone around an anchor
     private float lx, ly, lz;
+    private float ax0, ay0, az0;
+    private float noise2;              // mean square of (raw unit - smoothed), rad^2
     private long anchorNs;
     private boolean still;
     private float gyroMag;
@@ -58,9 +82,11 @@ final class LevelEngine {
     // calibration
     int cal = CAL_IDLE;
     float calProgress;
-    boolean calEdge;
-    private int calAxis, calSign;
+    boolean calEdge;                   // pose being calibrated: false = lying flat, true = on an edge
+    int calHint, calFail;
+    private int calAxis = -1, calSign;
     private float yaw;
+    private boolean moved;
     private double sx, sy, sz;
     private int sn;
     private long captureStartNs = -1;
@@ -71,43 +97,65 @@ final class LevelEngine {
         float n = (float) Math.sqrt(rx * rx + ry * ry + rz * rz);
         if (n < 1f) return;                       // free fall or garbage
         float qx = rx / n, qy = ry / n, qz = rz / n;
+        boolean reset;
         if (!has) {
             has = true;
             fx = rx; fy = ry; fz = rz;
-            ux = qx; uy = qy; uz = qz;
-            ax0 = qx; ay0 = qy; az0 = qz;
+            px = lx = ax0 = qx;
+            py = ly = ay0 = qy;
+            pz = lz = az0 = qz;
+            noise2 = 0f;
             anchorNs = ns;
             lastNs = ns;
+            reset = false;
         } else {
             float dt = clamp((ns - lastNs) * 1e-9f, 1e-4f, 0.2f);
             lastNs = ns;
-            float inst = angle(qx, qy, qz, ux, uy, uz) / dt;
-            ux = qx; uy = qy; uz = qz;
-            speed += (inst - speed) * (1f - (float) Math.exp(-dt / 0.15f));
-            float k = clamp(speed / 0.5f, 0f, 1f);
+
+            float opx = px, opy = py, opz = pz;
+            float ap = 1f - (float) Math.exp(-dt / PRE_TAU);
+            px += (qx - px) * ap;
+            py += (qy - py) * ap;
+            pz += (qz - pz) * ap;
+            float inst = angle(px, py, pz, opx, opy, opz) / dt;
+            speed += (inst - speed) * (1f - (float) Math.exp(-dt / SPEED_TAU));
+            float k = clamp((speed - SPEED_DEAD) / SPEED_FULL, 0f, 1f);
             float tau = 0.40f + (0.05f - 0.40f) * k;
             float a = 1f - (float) Math.exp(-dt / tau);
             fx += (rx - fx) * a;
             fy += (ry - fy) * a;
             fz += (rz - fz) * a;
-        }
 
-        // stillness, judged on a lightly smoothed unit vector so sensor noise alone never breaks it
-        if (anchorNs == ns) {
-            lx = qx; ly = qy; lz = qz;
-        } else {
-            lx += (qx - lx) * 0.18f;
-            ly += (qy - ly) * 0.18f;
-            lz += (qz - lz) * 0.18f;
+            // stillness: the smoothed vector must stay inside a cone sized to the measured noise
+            if (angle(qx, qy, qz, lx, ly, lz) > SNAP_RAD) {
+                lx = qx; ly = qy; lz = qz;             // a real move: no need to wait for the smoothing
+            } else {
+                float al = 1f - (float) Math.exp(-dt / STILL_TAU);
+                lx += (qx - lx) * al;
+                ly += (qy - ly) * al;
+                lz += (qz - lz) * al;
+            }
+            float ex = qx - lx, ey = qy - ly, ez = qz - lz;
+            float e2 = Math.min(ex * ex + ey * ey + ez * ez, NOISE_CAP);
+            noise2 += (e2 - noise2) * (1f - (float) Math.exp(-dt / NOISE_TAU));
+            float sigma = (float) Math.sqrt(noise2 * 0.5f);                   // per axis, raw
+            float sigmaL = sigma * (float) Math.sqrt(dt / (2f * STILL_TAU));  // per axis, smoothed
+            float cone = Math.max(STILL_RAD, 5f * sigmaL);
+            boolean gyroQuiet = !gyroSeen || ns - lastGyroNs > 500_000_000L || gyroMag < 0.06f;
+            reset = angle(lx, ly, lz, ax0, ay0, az0) > cone || sigma > STILL_NOISE_MAX || !gyroQuiet;
+            if (reset) {
+                ax0 = lx; ay0 = ly; az0 = lz;
+                anchorNs = ns;
+            }
+            if ((cal == CAL_TURN || cal == CAL_STEP2) && !moved) {
+                float n1 = (float) Math.sqrt(c1x * c1x + c1y * c1y + c1z * c1z);
+                moved = sigma > MOVED_NOISE || angle(lx, ly, lz, c1x / n1, c1y / n1, c1z / n1) > MOVED_RAD;
+            }
         }
-        boolean gyroQuiet = !gyroSeen || ns - lastGyroNs > 500_000_000L || gyroMag < 0.06f;
-        if (angle(lx, ly, lz, ax0, ay0, az0) > STILL_RAD || !gyroQuiet) {
-            ax0 = lx; ay0 = ly; az0 = lz;
-            anchorNs = ns;
-        }
-        still = ns - anchorNs > STILL_NS;
+        still = !reset && ns - anchorNs > STILL_NS;
 
         compute();
+        if (cal == CAL_STEP1) calEdge = incl > 45f;       // instruction follows the live pose until captured
         if (cal == CAL_STEP1 || cal == CAL_STEP2) capture(rx, ry, rz, ns);
     }
 
@@ -116,10 +164,12 @@ final class LevelEngine {
         lastGyroNs = ns;
         gyroSeen = true;
         gyroMag = (float) Math.sqrt(wx * wx + wy * wy + wz * wz);
-        if (cal == CAL_TURN && has) {
+        if ((cal == CAL_TURN || cal == CAL_STEP2) && has) {
+            if (gyroMag > MOVED_GYRO) moved = true;
             float n = (float) Math.sqrt(fx * fx + fy * fy + fz * fz);
-            yaw += (wx * fx + wy * fy + wz * fz) / n * dt;   // rotation rate about the vertical
-            if (Math.abs(yaw) > TURN_RAD) enterStep2();
+            float w = (wx * fx + wy * fy + wz * fz) / n;      // rotation rate about the vertical
+            if (Math.abs(w) > GYRO_DEAD) yaw += w * dt;
+            if (cal == CAL_TURN && Math.abs(yaw) > TURN_RAD) enterStep2();
         }
     }
 
@@ -129,10 +179,30 @@ final class LevelEngine {
     }
 
     private void compute() {
-        // Filtering, stillness and calibration stay in the device frame (sensor offsets are fixed
-        // to the hardware). Only the outputs are expressed in display coordinates, so the bubble
-        // tracks the screen on landscape-natural tablets and when the system rotates the window.
-        float dx = fx - bx, dy = fy - by, gz = fz - bz;
+        float n0 = (float) Math.sqrt(fx * fx + fy * fy + fz * fz);
+        if (n0 < 1e-3f) return;
+        // Mode from the raw vector: offsets are a fraction of a degree, the hysteresis band is ten.
+        incl = (float) Math.acos(Math.min(1f, Math.abs(fz) / n0)) * RAD;
+        if (lock == LOCK_FLAT) mode = MODE_FLAT;
+        else if (lock == LOCK_EDGE) mode = MODE_EDGE;
+        else if (mode == MODE_FLAT && incl > 50f) mode = MODE_EDGE;
+        else if (mode == MODE_EDGE && incl < 40f) mode = MODE_FLAT;
+
+        // Offsets belong to the pose they were measured in (device frame).
+        boolean flatPose = lock == LOCK_AUTO ? mode == MODE_FLAT : incl < 45f;
+        float dx = fx, dy = fy;
+        if (flatPose) {
+            dx -= fbx;
+            dy -= fby;
+        } else if (Math.abs(fy) >= Math.abs(fx)) {
+            dx -= ebx;                    // standing upright or upside down: x runs along the edge
+        } else {
+            dy -= eby;                    // standing on a long side: y runs along the edge
+        }
+        float gz = fz;
+
+        // Outputs in display coordinates, so the bubble tracks the screen on landscape-natural
+        // tablets and when the system rotates the window.
         float gx, gy;
         switch (rotation & 3) {
             case 1:  gx = -dy; gy = dx;  break;   // ROTATION_90
@@ -144,23 +214,22 @@ final class LevelEngine {
         if (n < 1e-3f) return;
         valid = true;
         float h = (float) Math.sqrt(gx * gx + gy * gy);
-        incl = (float) Math.acos(Math.min(1f, Math.abs(gz) / n)) * RAD;
         tilt = (float) Math.atan2(h, gz) * RAD;
         ax = (float) Math.atan2(gx, gz) * RAD;
         ay = (float) Math.atan2(gy, gz) * RAD;
         dir = (float) Math.atan2(gy, gx);
         roll = (float) Math.atan2(gx, gy) * RAD;
 
-        if (lock == LOCK_FLAT) mode = MODE_FLAT;
-        else if (lock == LOCK_EDGE) mode = MODE_EDGE;
-        else if (mode == MODE_FLAT && incl > 50f) mode = MODE_EDGE;
-        else if (mode == MODE_EDGE && incl < 40f) mode = MODE_FLAT;
-
-        if (Math.abs(wrap(roll - quarter)) > 52f) {
+        // Lying flat, roll is noise: keep the last quarter instead of spinning the tube.
+        if (h > 0.5f * n && Math.abs(wrap(roll - quarter)) > 52f) {
             quarter = Math.round(roll / 90f) * 90;
             if (quarter == -180) quarter = 180;
         }
-        dev = wrap(roll - quarter);
+        // Slope of the tube axis (cos q, -sin q) against the horizontal plane. Exact at any lean
+        // of the screen; atan2(gx, gy) alone would overstate it by 1 / cos(lean).
+        double q = Math.toRadians(quarter);
+        float along = (float) (gx * Math.cos(q) - gy * Math.sin(q)) / n;
+        dev = (float) Math.asin(clamp(along, -1f, 1f)) * RAD;
     }
 
     // ---- calibration -------------------------------------------------------------------------
@@ -168,20 +237,29 @@ final class LevelEngine {
     void startCal() {
         if (!has) return;
         cal = CAL_STEP1;
-        calEdge = mode == MODE_EDGE;
-        calAxis = dominantAxis(fx, fy, fz);
-        calSign = component(fx, fy, fz, calAxis) >= 0 ? 1 : -1;
+        calAxis = -1;
+        calEdge = incl > 45f;
+        calHint = HINT_NONE;
+        calFail = FAIL_NONE;
+        moved = false;
+        yaw = 0f;
         resetCapture();
     }
 
     void cancelCal() {
         cal = CAL_IDLE;
+        calHint = HINT_NONE;
         resetCapture();
     }
 
-    /** Manual fallback for "I have turned it around" (no gyroscope, or user preference). */
+    /** Manual fallback for "I have turned it around" (no gyroscope, or a turn the gyro missed). */
     void manualReady() {
-        if (cal == CAL_TURN) enterStep2();
+        if (cal != CAL_TURN) return;
+        if (gyroSeen && Math.abs(yaw) < NOT_TURNED) {
+            calHint = HINT_TURN_FIRST;
+            return;
+        }
+        enterStep2();
     }
 
     int takeEvents() {
@@ -192,6 +270,7 @@ final class LevelEngine {
 
     private void enterStep2() {
         cal = CAL_STEP2;
+        calHint = HINT_NONE;
         resetCapture();
     }
 
@@ -200,17 +279,18 @@ final class LevelEngine {
         sn = 0;
         captureStartNs = -1;
         calProgress = 0f;
-        yaw = 0f;
     }
 
     private void capture(float rx, float ry, float rz, long ns) {
-        boolean sameFace = dominantAxis(rx, ry, rz) == calAxis
-                && (component(rx, ry, rz, calAxis) >= 0 ? 1 : -1) == calSign;
-        if (!still || !sameFace) {
-            sx = sy = sz = 0;
-            sn = 0;
-            captureStartNs = -1;
-            calProgress = 0f;
+        boolean ok = still;
+        if (cal == CAL_STEP2) {
+            boolean sameFace = dominantAxis(rx, ry, rz) == calAxis
+                    && (component(rx, ry, rz, calAxis) >= 0 ? 1 : -1) == calSign;
+            calHint = !sameFace ? HINT_WRONG_SIDE : !moved ? HINT_TURN_FIRST : HINT_NONE;
+            ok &= sameFace && moved;
+        }
+        if (!ok) {
+            resetCapture();
             return;
         }
         if (captureStartNs < 0) captureStartNs = ns;
@@ -221,26 +301,58 @@ final class LevelEngine {
 
         float mx = (float) (sx / sn), my = (float) (sy / sn), mz = (float) (sz / sn);
         if (cal == CAL_STEP1) {
+            // The pose actually captured decides what is calibrated, whatever the mode said.
             c1x = mx; c1y = my; c1z = mz;
+            calAxis = dominantAxis(mx, my, mz);
+            calSign = component(mx, my, mz, calAxis) >= 0 ? 1 : -1;
+            calEdge = calAxis != 2;
             cal = CAL_TURN;
+            moved = false;
+            yaw = 0f;
             resetCapture();
             events |= EV_CAPTURE;
             return;
         }
-        // step 2: resolve the two horizontal components of the offset
-        float nbx = calAxis == 0 ? bx : (c1x + mx) / 2f;
-        float nby = calAxis == 1 ? by : (c1y + my) / 2f;
-        float nbz = calAxis == 2 ? bz : (c1z + mz) / 2f;
-        float ox = calAxis == 0 ? 0f : nbx, oy = calAxis == 1 ? 0f : nby, oz = calAxis == 2 ? 0f : nbz;
-        if (Math.abs(ox) > MAX_BIAS || Math.abs(oy) > MAX_BIAS || Math.abs(oz) > MAX_BIAS) {
-            cal = CAL_FAILED;
-            events |= EV_FAILED;
+
+        // step 2
+        float turn = gyroSeen ? Math.abs(yaw) : (float) Math.PI;
+        boolean ok2;
+        if (gyroSeen && (turn < TURN_MIN || turn > TURN_MAX)) {
+            calFail = FAIL_TURN;
+            ok2 = false;
+        } else if (calAxis == 2) {
+            // Device frame sees the world slope turn by -yaw about "up"; up is -z when face down.
+            float phi = gyroSeen ? -calSign * yaw : (float) Math.PI;
+            float c = (float) Math.cos(phi), s = (float) Math.sin(phi);
+            float det = 2f * (1f - c);
+            float ddx = c1x - mx, ddy = c1y - my;
+            float tx = ((1f - c) * ddx - s * ddy) / det;
+            float ty = (s * ddx + (1f - c) * ddy) / det;
+            float nbx = c1x - tx, nby = c1y - ty;
+            ok2 = Math.abs(nbx) <= MAX_BIAS && Math.abs(nby) <= MAX_BIAS;
+            if (ok2) {
+                fbx = nbx;
+                fby = nby;
+            }
         } else {
-            bx = nbx; by = nby; bz = nbz;
+            // On an edge only the axis along the edge is solvable: the lean is not world-fixed.
+            float nb = calAxis == 1 ? (c1x + mx) / 2f : (c1y + my) / 2f;
+            ok2 = Math.abs(nb) <= MAX_BIAS;
+            if (ok2) {
+                if (calAxis == 1) ebx = nb;
+                else eby = nb;
+            }
+        }
+        if (ok2) {
             cal = CAL_DONE;
             events |= EV_DONE;
             compute();
+        } else {
+            if (calFail == FAIL_NONE) calFail = FAIL_OFFSET;
+            cal = CAL_FAILED;
+            events |= EV_FAILED;
         }
+        calHint = HINT_NONE;
         sx = sy = sz = 0;
         sn = 0;
         captureStartNs = -1;

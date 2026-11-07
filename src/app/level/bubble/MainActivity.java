@@ -17,6 +17,7 @@ import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
 
+import java.io.File;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
@@ -33,7 +34,7 @@ public final class MainActivity extends Activity implements SensorEventListener,
     private LevelView view;
     private Display display;
     private Object backCallback;
-    private boolean backRegistered;
+    private boolean backRegistered, backUnavailable;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -41,12 +42,13 @@ public final class MainActivity extends Activity implements SensorEventListener,
         display = getWindowManager().getDefaultDisplay();
         prefs = getSharedPreferences("level", MODE_PRIVATE);
         settings.load(prefs);
+        settings.loadCalibration(calibrationFile());
         engine.lock = settings.lock;
-        if (settings.calibrated) {
-            engine.bx = settings.bx;
-            engine.by = settings.by;
-            engine.bz = settings.bz;
-        }
+        engine.fbx = settings.fbx;
+        engine.fby = settings.fby;
+        engine.ebx = settings.ebx;
+        engine.eby = settings.eby;
+        engine.rotation = display.getRotation();
 
         sensors = (SensorManager) getSystemService(SENSOR_SERVICE);
         if (sensors != null) {
@@ -100,7 +102,7 @@ public final class MainActivity extends Activity implements SensorEventListener,
      */
     @Override
     public void setBackIntercept(boolean on) {
-        if (Build.VERSION.SDK_INT < 36 || on == backRegistered) return;
+        if (Build.VERSION.SDK_INT < 36 || on == backRegistered || backUnavailable) return;
         try {
             Class<?> cbType = Class.forName("android.window.OnBackInvokedCallback");
             Class<?> dispType = Class.forName("android.window.OnBackInvokedDispatcher");
@@ -133,15 +135,18 @@ public final class MainActivity extends Activity implements SensorEventListener,
                 dispType.getMethod("unregisterOnBackInvokedCallback", cbType).invoke(dispatcher, backCallback);
             }
             backRegistered = on;
-        } catch (Exception ignored) {
-            // leaves the platform default: back closes the activity
+        } catch (Exception e) {
+            backUnavailable = true;   // platform default: back closes the activity; don't retry every frame
         }
     }
 
     @Override
     public void onConfigurationChanged(Configuration c) {
         super.onConfigurationChanged(c);
+        engine.rotation = display.getRotation();
+        engine.refresh();
         view.requestLayout();
+        view.invalidate();
     }
 
     // ---- sensors -----------------------------------------------------------------------------
@@ -182,16 +187,31 @@ public final class MainActivity extends Activity implements SensorEventListener,
     }
 
     @Override
+    public void onCalibrationChanged() {
+        settings.saveCalibration(calibrationFile());
+    }
+
+    /** Excluded from cloud backup and device-to-device transfer: an offset is specific to one sensor. */
+    private File calibrationFile() {
+        return new File(getNoBackupFilesDir(), "calibration");
+    }
+
+    @Override
     public void onThemeApplied(Palette p) {
         Window w = getWindow();
         w.setBackgroundDrawable(new ColorDrawable(p.bg));
         boolean lightBars = !p.dark;
+        if (Build.VERSION.SDK_INT < 26) {
+            // No dark navigation icons before 8.0: give the white ones a scrim on light themes.
+            w.setNavigationBarColor(lightBars ? 0x66000000 : 0);
+        }
         if (Build.VERSION.SDK_INT >= 30) {
             try {
                 Object ctl = Window.class.getMethod("getInsetsController").invoke(w);
                 if (ctl != null) {
                     int mask = 8 | 16;   // APPEARANCE_LIGHT_STATUS_BARS | APPEARANCE_LIGHT_NAVIGATION_BARS
-                    Method m = ctl.getClass().getMethod("setSystemBarsAppearance", int.class, int.class);
+                    Method m = Class.forName("android.view.WindowInsetsController")
+                            .getMethod("setSystemBarsAppearance", int.class, int.class);
                     m.invoke(ctl, lightBars ? mask : 0, mask);
                     return;
                 }
@@ -266,7 +286,7 @@ public final class MainActivity extends Activity implements SensorEventListener,
                         sys("system_neutral2_700"), sys("system_accent1_200"), sys("system_accent1_800"));
             }
             return new Palette("Wallpaper", false,
-                    sys("system_neutral1_10"), sys("system_neutral1_800"), sys("system_neutral2_500"),
+                    sys("system_neutral1_10"), sys("system_neutral1_800"), sys("system_neutral2_600"),
                     sys("system_neutral2_100"), sys("system_accent1_600"), sys("system_accent1_0"));
         } catch (RuntimeException e) {
             return null;

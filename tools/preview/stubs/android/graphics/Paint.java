@@ -23,6 +23,7 @@ public class Paint {
     public void setColor(int c) { color = c; }
     public void setTypeface(Typeface t) { tf = t; }
     public void setTextSize(float s) { textSize = s; }
+    public float getTextSize() { return textSize; }
     public Font font() { Font base = tf != null ? tf.font : new Font("SansSerif", Font.PLAIN, 1); return base.deriveFont(textSize); }
     public float measureText(String s) { return s.isEmpty() ? 0f : (float) font().getStringBounds(s, FRC).getWidth(); }
     public float measureText(String s, int start, int end) { return measureText(s.substring(start, end)); }

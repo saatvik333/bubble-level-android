@@ -12,6 +12,10 @@ import android.graphics.Typeface;
  * Visual grammar: flat colour, hairline strokes, one accent, circles as the primary shape,
  * everything centred on a single column, outlined pills for actions, filled accent circles
  * for "on" states, theme name flanked by chevrons at the top.
+ *
+ * Layout adapts to the window: the surface instrument stacks vial over readout, moves the readout
+ * beside the vial in short wide windows, and scales down as a last resort; the edge instrument
+ * scales to fit its square; the settings page scrolls.
  */
 final class Renderer {
     static final int H_THEME_PREV = 1, H_THEME_NEXT = 2, H_SETTINGS = 3, H_CALIBRATE = 4, H_HOLD = 5,
@@ -31,6 +35,9 @@ final class Renderer {
     private Ui u;
     private float dp, sp;
     private float a = 1f;            // alpha multiplier for the layer being drawn
+    private float left, usable, cx0; // horizontal safe area: left edge, width, centre
+    private float hitDy;             // canvas translation of the layer being drawn, applied to hit rects
+    private float clipT = Float.NEGATIVE_INFINITY, clipB = Float.POSITIVE_INFINITY;
 
     Renderer(Typeface light, Typeface regular) {
         this.light = light;
@@ -46,6 +53,9 @@ final class Renderer {
         u = ui;
         dp = ui.dp;
         sp = ui.sp;
+        left = ui.insetL;
+        usable = Math.max(1f, ui.width - ui.insetL - ui.insetR);
+        cx0 = left + usable / 2f;
         ui.resetHits();
         Palette p = ui.pal;
         c.drawColor(p.bg);
@@ -54,19 +64,22 @@ final class Renderer {
         boolean levelActive = pt < 0.5f;
         if (pt < 0.999f) {
             a = 1f - pt;
+            hitDy = -16f * dp * pt;
             c.save();
-            c.translate(0f, -16f * dp * pt);
+            c.translate(0f, hitDy);
             drawLevelPage(c, p, levelActive);
             c.restore();
         }
         if (pt > 0.001f) {
             a = pt;
+            hitDy = 24f * dp * (1f - pt);
             c.save();
-            c.translate(0f, 24f * dp * (1f - pt));
+            c.translate(0f, hitDy);
             drawSettingsPage(c, p, !levelActive);
             c.restore();
         }
         a = 1f;
+        hitDy = 0f;
         drawHeader(c, p);
         drawPressed(c, p);
     }
@@ -74,7 +87,7 @@ final class Renderer {
     // ---- header ------------------------------------------------------------------------------
 
     private void drawHeader(Canvas c, Palette p) {
-        float cy = u.insetT + 32f * dp, cx = u.width / 2f;
+        float cy = u.insetT + 32f * dp, cx = cx0;
         text.setTypeface(regular);
         text.setTextSize(14f * sp);
         text.setColor(col(p.fg));
@@ -87,12 +100,12 @@ final class Renderer {
         hit(H_THEME_NEXT, cx + 1f, cy - 24f * dp, cx + off + 30f * dp, cy + 24f * dp, cx + off, cy, 20f * dp);
 
         if (u.pageT > 0.001f) {
-            float bx = u.insetL + 30f * dp;
+            float bx = left + 30f * dp;
             a = u.pageT;
             chevron(c, bx, cy, -1, 6f * dp, 1.5f * dp, col(p.fg));
             a = 1f;
             if (u.pageT >= 0.5f) {
-                hit(H_BACK, u.insetL, cy - 28f * dp, bx + 30f * dp, cy + 28f * dp, bx, cy, 22f * dp);
+                hit(H_BACK, left, cy - 28f * dp, bx + 30f * dp, cy + 28f * dp, bx, cy, 22f * dp);
             }
         }
     }
@@ -103,31 +116,68 @@ final class Renderer {
         float top = u.insetT + 64f * dp;
         float bottom = u.height - u.insetB - 80f * dp;
         float pillRow = 64f * dp;
-        float area = bottom - top - pillRow;
+        float area = Math.max(1f, bottom - top - pillRow);
         float base = a;
         float mt = u.modeT;
         if (mt < 0.999f) {
             a = base * (1f - mt);
-            drawSurface(c, p, top, area, active && mt < 0.5f);
+            drawSurface(c, p, top, area, active && mt < 0.5f, mt < 0.5f);
         }
         if (mt > 0.001f) {
             a = base * mt;
-            drawEdge(c, p, top, area, active && mt >= 0.5f);
+            drawEdge(c, p, top, area, active && mt >= 0.5f, mt >= 0.5f);
         }
         a = base;
-        if (u.calActive) drawCalPills(c, p, u.width / 2f, top + area + pillRow / 2f, active);
+        if (u.calActive) drawCalPills(c, p, cx0, top + area + pillRow / 2f, active);
         drawBottomBar(c, p, active);
     }
 
-    private void drawSurface(Canvas c, Palette p, float top, float area, boolean active) {
-        float readH = 132f * dp, gap = 28f * dp;
-        float d = Math.min(u.width - 64f * dp, area - readH - gap);
-        d = Math.max(d, 140f * dp);
-        float blockH = d + gap + readH;
-        float y0 = top + Math.max(0f, (area - blockH) / 2f);
-        float cx = u.width / 2f, cy = y0 + d / 2f, R = d / 2f;
+    /** Height of the caption + value + two-line secondary block drawn by {@link #drawReadout}. */
+    private float readoutH() {
+        return 12f * dp + 113f * sp;
+    }
+
+    private void drawSurface(Canvas c, Palette p, float top, float area, boolean active, boolean primary) {
+        float readH = readoutH(), gap = 24f * dp, minD = 150f * dp;
+        float d = Math.min(usable - 64f * dp, area - readH - gap);
+
+        // short, wide window: readout beside the vial
+        float sideW = usable - 32f * dp;
+        float d2 = Math.min(area - 16f * dp, sideW * 0.45f);
+        float rw = Math.min(sideW - d2 - 20f * dp, 360f * dp);
+        if (d < minD && d2 >= 96f * dp && rw >= 160f * dp && area >= readH) {
+            float x0 = cx0 - (d2 + 20f * dp + rw) / 2f;
+            float vx = x0 + d2 / 2f, vy = top + area / 2f;
+            drawVial(c, p, vx, vy, d2 / 2f, 1f, primary);
+            float rx = x0 + d2 + 20f * dp + rw / 2f;
+            float ry = top + (area - readH) / 2f;
+            drawReadout(c, p, rx, ry, rw);
+            if (active) hit(H_READOUT, x0, top, x0 + d2 + 20f * dp + rw, top + area, 0, 0, -1f);
+            return;
+        }
+
+        // stacked; scaled down when even the minimum vial does not fit
+        float dd = Math.max(d, minD);
+        float blockH = dd + gap + readH;
+        float s = Math.min(1f, Math.min(area / blockH, (usable - 32f * dp) / Math.max(dd, 1f)));
+        float y0 = top + Math.max(0f, (area - blockH * s) / 2f);
+        float cx = cx0;
+        c.save();
+        if (s < 1f) c.scale(s, s, cx, y0);
+        drawVial(c, p, cx, y0 + dd / 2f, dd / 2f, s, primary);
+        drawReadout(c, p, cx, y0 + dd + gap, usable - 48f * dp);
+        c.restore();
+        if (active) {
+            float hw = Math.max(dd / 2f, (usable - 48f * dp) / 2f) * s;
+            hit(H_READOUT, cx - hw, y0, cx + hw, y0 + blockH * s, 0, 0, -1f);
+        }
+    }
+
+    /** Bullseye vial of radius R; {@code scale} is the canvas scale in force, for the travel report. */
+    private void drawVial(Canvas c, Palette p, float cx, float cy, float R, float scale, boolean primary) {
         float b = R * 0.17f;
         float travel = R - b - 4f * dp;
+        if (primary) u.travelPx = Math.max(1f, travel * scale);
         float tr = b * 1.22f;
         float lt = u.levelT;
 
@@ -154,10 +204,12 @@ final class Renderer {
         // crosshair, broken around the target ring
         stroke.setColor(col(p.line));
         float inner = tr + 6f * dp, outer = R - 10f * dp;
-        c.drawLine(cx - outer, cy, cx - inner, cy, stroke);
-        c.drawLine(cx + inner, cy, cx + outer, cy, stroke);
-        c.drawLine(cx, cy - outer, cx, cy - inner, stroke);
-        c.drawLine(cx, cy + inner, cx, cy + outer, stroke);
+        if (outer > inner) {
+            c.drawLine(cx - outer, cy, cx - inner, cy, stroke);
+            c.drawLine(cx + inner, cy, cx + outer, cy, stroke);
+            c.drawLine(cx, cy - outer, cx, cy - inner, stroke);
+            c.drawLine(cx, cy + inner, cx, cy + outer, stroke);
+        }
 
         // calibration progress around the vial
         if (u.calActive && u.calProgress > 0f) {
@@ -188,23 +240,34 @@ final class Renderer {
             stroke.setColor(col(p.accent, (1f - q) * 0.8f));
             c.drawCircle(cx, cy, tr + q * b * 1.7f, stroke);
         }
-
-        if (active) hit(H_READOUT, cx - R, cy - R, cx + R, y0 + blockH, 0, 0, -1f);
-        drawReadout(c, p, cx, y0 + d + gap, u.width - 48f * dp);
     }
 
-    private void drawEdge(Canvas c, Palette p, float top, float area, boolean active) {
-        float cx = u.width / 2f, cy = top + area / 2f;
-        float S = Math.min(u.width - 32f * dp, area);
+    private void drawEdge(Canvas c, Palette p, float top, float area, boolean active, boolean primary) {
+        // The instrument turns with the device. Its content box (tube on top, readout below) keeps
+        // one size in every orientation and is scaled down when the turned box would not fit.
+        // While not calibrating the empty pill row is free space too.
+        float availH = area + (u.calActive ? 0f : 48f * dp);
+        float cx = cx0, cy = top + availH / 2f;
+        float availW = Math.max(1f, usable - 32f * dp);
+        float readH = readoutH();
+        float W = Math.min(availW, Math.max(availH, 300f * dp));
+        float L = W * 0.88f;
+        float h = clamp(L * 0.15f, 44f * dp, 68f * dp);
+        float H = 34f * dp + h + 30f * dp + readH;
+        float s0 = Math.min(1f, Math.min(availW / W, availH / H));    // tube horizontal on screen
+        float s90 = Math.min(1f, Math.min(availW / H, availH / W));   // tube vertical on screen
+        float sn = (float) Math.sin(Math.toRadians(u.rotation));
+        float s = s0 + (s90 - s0) * sn * sn;
+
         c.save();
         c.rotate(u.rotation, cx, cy);
+        if (s < 1f) c.scale(s, s, cx, cy);
 
-        float L = S * 0.88f;
-        float h = clamp(L * 0.15f, 44f * dp, 68f * dp);
-        float ty = cy - S * 0.14f;
+        float ty = cy - H / 2f + 34f * dp + h / 2f;
         float inset = 5f * dp;
         float bl = L * 0.2f;
         float travel = L / 2f - bl / 2f - inset;
+        if (primary) u.travelPx = Math.max(1f, travel * s);
         float lt = u.levelT;
         float tubeTop = ty - h / 2f, tubeBot = ty + h / 2f;
 
@@ -264,14 +327,17 @@ final class Renderer {
             c.drawRoundRect(rect, r, r, stroke);
         }
 
-        drawReadout(c, p, cx, tubeBot + 30f * dp, S - 24f * dp);
+        drawReadout(c, p, cx, tubeBot + 30f * dp, W - 24f * dp);
         c.restore();
-        if (active) hit(H_READOUT, cx - S / 2f, cy - S / 2f, cx + S / 2f, cy + S / 2f, 0, 0, -1f);
+        if (active) {
+            float hw = Math.max(W * Math.abs((float) Math.cos(Math.toRadians(u.rotation))), H * Math.abs(sn)) * s / 2f;
+            float hh = Math.max(H * Math.abs((float) Math.cos(Math.toRadians(u.rotation))), W * Math.abs(sn)) * s / 2f;
+            hit(H_READOUT, cx - hw, cy - hh, cx + hw, cy + hh, 0, 0, -1f);
+        }
     }
 
-    /** Caption, big value, secondary line. {@code top} is the top of a ~132dp block. */
+    /** Caption, big value, secondary line(s). {@code top} is the top of a {@link #readoutH()} block. */
     private void drawReadout(Canvas c, Palette p, float cx, float top, float maxW) {
-        Palette pp = p;
         float capBase = top + 14f * sp;
         float mainBase = capBase + 12f * dp + 47f * sp;
         float secBase = mainBase + 30f * sp;
@@ -279,7 +345,7 @@ final class Renderer {
         text.setTypeface(regular);
         text.setTextSize(12f * sp);
         boolean capAccent = u.held && !u.calActive;
-        text.setColor(col(capAccent ? pp.accent : pp.dim));
+        text.setColor(col(capAccent ? p.accentText : p.dim));
         c.drawText(u.calActive ? (u.calProgress > 0f && u.calProgress < 1f ? "Hold still" : u.caption) : u.caption,
                 cx, capBase, text);
 
@@ -306,7 +372,7 @@ final class Renderer {
             total = maxW;
             text.setTextSize(size);
         }
-        int mainCol = u.calActive ? pp.fg : Palette.mix(pp.fg, pp.accent, u.levelT);
+        int mainCol = u.calActive ? p.fg : Palette.mix(p.fg, p.accentText, u.levelT);
         text.setColor(col(mainCol));
         text.setTextAlign(Paint.Align.LEFT);
         float x0 = cx - total / 2f;
@@ -314,54 +380,67 @@ final class Renderer {
         if (uw > 0f) {
             text.setTypeface(regular);
             text.setTextSize(us);
-            text.setColor(col(pp.dim));
+            text.setColor(col(p.dim));
             c.drawText(unit, x0 + mw + 6f * dp, base, text);
         }
         text.setTextAlign(Paint.Align.CENTER);
 
         text.setTypeface(regular);
         text.setTextSize(13f * sp);
-        text.setColor(col(u.secondaryAccent ? pp.accent : pp.dim));
+        text.setColor(col(u.secondaryAccent ? p.accentText : p.dim));
         wrapped(c, u.secondary, cx, secBase, maxW, 18f * sp);
     }
 
     private void drawCalPills(Canvas c, Palette p, float cx, float cy, boolean active) {
         if (u.calShowReady) {
-            pill(c, p, "Cancel", cx - 66f * dp, cy, H_CAL_CANCEL, active, false);
-            pill(c, p, "Ready", cx + 66f * dp, cy, H_CAL_READY, active, true);
+            float off = Math.min(66f * dp, (usable - 24f * dp) / 4f);
+            pill(c, p, "Cancel", cx - off, cy, H_CAL_CANCEL, active, false, 2f * off - 12f * dp);
+            pill(c, p, "Ready", cx + off, cy, H_CAL_READY, active, true, 2f * off - 12f * dp);
         } else {
-            pill(c, p, "Cancel", cx, cy, H_CAL_CANCEL, active, false);
+            pill(c, p, "Cancel", cx, cy, H_CAL_CANCEL, active, false, usable - 24f * dp);
         }
     }
 
     private void drawBottomBar(Canvas c, Palette p, boolean active) {
         float y = u.height - u.insetB - 40f * dp;
-        float w = u.width;
-        float x1 = w * 0.25f, x2 = w * 0.5f, x3 = w * 0.75f;
+        float x1 = left + usable * 0.25f, x2 = left + usable * 0.5f, x3 = left + usable * 0.75f;
         iconSliders(c, x1, y, col(p.dim), col(p.bg));
         iconTarget(c, x2, y, col(u.calActive ? p.accent : p.dim));
         iconHold(c, p, x3, y, u.held);
         if (active) {
-            float r = 30f * dp;
-            hit(H_SETTINGS, x1 - r, y - r, x1 + r, y + r, x1, y, 22f * dp);
-            hit(H_CALIBRATE, x2 - r, y - r, x2 + r, y + r, x2, y, 22f * dp);
-            hit(H_HOLD, x3 - r, y - r, x3 + r, y + r, x3, y, 22f * dp);
+            float r = Math.min(30f * dp, usable / 8f);
+            hit(H_SETTINGS, x1 - r, y - 30f * dp, x1 + r, y + 30f * dp, x1, y, 22f * dp);
+            hit(H_CALIBRATE, x2 - r, y - 30f * dp, x2 + r, y + 30f * dp, x2, y, 22f * dp);
+            hit(H_HOLD, x3 - r, y - 30f * dp, x3 + r, y + 30f * dp, x3, y, 22f * dp);
         }
     }
 
     // ---- settings page -----------------------------------------------------------------------
 
     private void drawSettingsPage(Canvas c, Palette p, boolean active) {
-        float cx = u.width / 2f;
+        float cx = cx0;
+        float viewTop = u.insetT + 56f * dp, viewBottom = u.height - u.insetB;
         float top = u.insetT + 64f * dp;
+        float rowsTop = top + 60f * dp;
+        float minRow = 18f * sp + 60f * dp;
+        float rh = Math.max(minRow, Math.min(96f * dp, (viewBottom - 16f * dp - rowsTop) / 6f));
+        float contentBottom = rowsTop + 6f * rh + 16f * dp;
+        u.settingsMaxScroll = Math.max(0f, contentBottom - viewBottom);
+        float scroll = clamp(u.settingsScroll, 0f, u.settingsMaxScroll);
+
+        c.save();
+        c.clipRect(0f, viewTop, u.width, viewBottom);
+        c.translate(0f, -scroll);
+        float saveDy = hitDy;
+        hitDy -= scroll;
+        clipT = viewTop;
+        clipB = viewBottom;
+
         text.setTypeface(light);
         text.setTextSize(26f * sp);
         text.setColor(col(p.fg));
         c.drawText("Settings", cx, top + 26f * sp, text);
 
-        float rowsTop = top + 60f * dp;
-        float rowsBottom = u.height - u.insetB - 16f * dp;
-        float rh = Math.min(96f * dp, (rowsBottom - rowsTop) / 6f);
         float y = rowsTop;
         selectorRow(c, p, "Units", u.unitsLabel, y, rh, H_UNITS_PREV, H_UNITS_NEXT, active);
         y += rh;
@@ -376,12 +455,28 @@ final class Renderer {
         rowLabel(c, p, "Calibration", y);
         float cy = controlY(y, rh);
         if (u.calibrated) {
-            pill(c, p, "Reset", cx, cy, H_RESET, active, false);
+            pill(c, p, "Reset", cx, cy, H_RESET, active, false, usable - 24f * dp);
         } else {
             text.setTypeface(light);
             text.setTextSize(16f * sp);
             text.setColor(col(p.dim));
             textCentered(c, "Factory", cx, cy);
+        }
+
+        c.restore();
+        hitDy = saveDy;
+        clipT = Float.NEGATIVE_INFINITY;
+        clipB = Float.POSITIVE_INFINITY;
+
+        // scroll position hint
+        if (u.settingsMaxScroll > 0f) {
+            float trackH = viewBottom - viewTop - 32f * dp;
+            float thumbH = Math.max(24f * dp, trackH * (viewBottom - viewTop) / (contentBottom - viewTop));
+            float ty = viewTop + 16f * dp + (trackH - thumbH) * (scroll / u.settingsMaxScroll);
+            float tx = left + usable - 6f * dp;
+            stroke.setStrokeWidth(2f * dp);
+            stroke.setColor(col(p.line));
+            c.drawLine(tx, ty, tx, ty + thumbH, stroke);
         }
     }
 
@@ -394,19 +489,19 @@ final class Renderer {
         text.setTypeface(regular);
         text.setTextSize(13f * sp);
         text.setColor(col(p.fg, 0.9f));
-        c.drawText(label, u.width / 2f, y + 14f * sp, text);
+        c.drawText(label, cx0, y + 14f * sp, text);
     }
 
     private void selectorRow(Canvas c, Palette p, String label, String value, float y, float rh,
                              int prevId, int nextId, boolean active) {
         rowLabel(c, p, label, y);
-        float cx = u.width / 2f, cy = controlY(y, rh);
+        float cx = cx0, cy = controlY(y, rh);
         text.setTypeface(light);
         text.setTextSize(17f * sp);
         text.setColor(col(p.fg));
         float tw = text.measureText(value);
         textCentered(c, value, cx, cy);
-        float off = Math.max(tw, 96f * dp) / 2f + 18f * dp;
+        float off = Math.min(Math.max(tw, 96f * dp) / 2f + 18f * dp, usable / 2f - 24f * dp);
         chevron(c, cx - off, cy, -1, 5f * dp, 1.5f * dp, col(p.dim));
         chevron(c, cx + off, cy, 1, 5f * dp, 1.5f * dp, col(p.dim));
         if (active) {
@@ -418,8 +513,8 @@ final class Renderer {
 
     private void toggleRow(Canvas c, Palette p, String label, float t, float y, float rh, int id, boolean active) {
         rowLabel(c, p, label, y);
-        float cx = u.width / 2f, cy = controlY(y, rh);
-        float r = Math.min(22f * dp, (rh - 18f * sp) / 2f - 4f * dp);
+        float cx = cx0, cy = controlY(y, rh);
+        float r = clamp((rh - 18f * sp) / 2f - 6f * dp, 14f * dp, 22f * dp);
         if (t > 0.001f) {
             fill.setColor(col(p.accent, t));
             c.drawCircle(cx, cy, r, fill);
@@ -430,30 +525,32 @@ final class Renderer {
             c.drawCircle(cx, cy, r, stroke);
         }
         text.setTypeface(regular);
-        text.setTextSize(11f * sp);
+        text.setTextSize(Math.min(11f * sp, r * 0.62f));
         if (t > 0.001f) {
-            text.setColor(col(p.onAccent, t));
+            text.setColor(col(p.onAccentText, t));
             textCentered(c, "ON", cx, cy);
         }
         if (t < 0.999f) {
             text.setColor(col(p.dim, 1f - t));
             textCentered(c, "OFF", cx, cy);
         }
-        if (active) hit(id, cx - r - 12f * dp, cy - r - 6f * dp, cx + r + 12f * dp, cy + r + 6f * dp, cx, cy, r + 6f * dp);
+        float hr = Math.max(r + 6f * dp, 24f * dp);
+        if (active) hit(id, cx - hr - 12f * dp, cy - hr, cx + hr + 12f * dp, cy + hr, cx, cy, r + 6f * dp);
     }
 
     // ---- primitives --------------------------------------------------------------------------
 
-    private void pill(Canvas c, Palette p, String label, float cx, float cy, int id, boolean active, boolean filled) {
+    private void pill(Canvas c, Palette p, String label, float cx, float cy, int id, boolean active,
+                      boolean filled, float maxW) {
         text.setTypeface(regular);
         text.setTextSize(14f * sp);
-        float w = Math.max(112f * dp, text.measureText(label) + 48f * dp);
+        float w = Math.min(Math.max(112f * dp, text.measureText(label) + 48f * dp), Math.max(maxW, 72f * dp));
         float h = 40f * dp;
         rect.set(cx - w / 2f, cy - h / 2f, cx + w / 2f, cy + h / 2f);
         if (filled) {
             fill.setColor(col(p.accent));
             c.drawRoundRect(rect, h / 2f, h / 2f, fill);
-            text.setColor(col(p.onAccent));
+            text.setColor(col(p.onAccentText));
         } else {
             stroke.setStrokeWidth(1f * dp);
             stroke.setColor(col(p.dim, 0.7f));
@@ -534,7 +631,7 @@ final class Renderer {
         c.drawText(s, cx, cy - (fm.ascent + fm.descent) / 2f, text);
     }
 
-    /** Centred text, wrapped onto at most two lines at word boundaries. */
+    /** Centred text, wrapped onto at most two lines at word boundaries, the second shrunk to fit. */
     private void wrapped(Canvas c, String s, float cx, float base, float maxW, float lineH) {
         if (s == null || s.length() == 0) return;
         if (text.measureText(s) <= maxW) {
@@ -547,14 +644,27 @@ final class Renderer {
             else break;
         }
         if (cut < 0) {
-            c.drawText(s, cx, base, text);
+            fitLine(c, s, cx, base, maxW);
             return;
         }
         c.drawText(s.substring(0, cut), cx, base, text);
-        c.drawText(s.substring(cut + 1), cx, base + lineH, text);
+        fitLine(c, s.substring(cut + 1), cx, base + lineH, maxW);
+    }
+
+    private void fitLine(Canvas c, String s, float cx, float base, float maxW) {
+        float size = text.getTextSize(), w = text.measureText(s);
+        if (w > maxW && w > 0f) text.setTextSize(size * maxW / w);
+        c.drawText(s, cx, base, text);
+        text.setTextSize(size);
     }
 
     private void hit(int id, float l, float t, float r, float b, float vx, float vy, float vr) {
+        t += hitDy;
+        b += hitDy;
+        vy += hitDy;
+        if (t < clipT) t = clipT;
+        if (b > clipB) b = clipB;
+        if (b - t < 8f * dp) return;                 // scrolled out of view
         u.addHit(id, l, t, r, b, vx, vy, vr);
     }
 

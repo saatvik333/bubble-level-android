@@ -3,7 +3,7 @@ import java.awt.*;
 import java.awt.geom.*;
 import java.util.ArrayDeque;
 public class Canvas {
-    final Graphics2D g; final int w, h; final ArrayDeque<AffineTransform> stack = new ArrayDeque<>();
+    final Graphics2D g; final int w, h; final ArrayDeque<Object[]> stack = new ArrayDeque<>();
     public Canvas(Graphics2D g, int w, int h) {
         this.g = g; this.w = w; this.h = h;
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
@@ -12,8 +12,10 @@ public class Canvas {
         g.setRenderingHint(RenderingHints.KEY_FRACTIONALMETRICS, RenderingHints.VALUE_FRACTIONALMETRICS_ON);
     }
     public void drawColor(int c) { AffineTransform t = g.getTransform(); g.setTransform(new AffineTransform()); g.setColor(new Color(c, true)); g.fillRect(0, 0, w, h); g.setTransform(t); }
-    public int save() { stack.push(g.getTransform()); return stack.size(); }
-    public void restore() { g.setTransform(stack.pop()); }
+    public int save() { stack.push(new Object[]{g.getTransform(), g.getClip()}); return stack.size(); }
+    public void restore() { Object[] st = stack.pop(); g.setTransform((AffineTransform) st[0]); g.setClip((Shape) st[1]); }
+    public boolean clipRect(float l, float t, float r, float b) { g.clip(new Rectangle2D.Float(l, t, r - l, b - t)); return true; }
+    public void scale(float sx, float sy, float px, float py) { g.translate(px, py); g.scale(sx, sy); g.translate(-px, -py); }
     public void translate(float x, float y) { g.translate(x, y); }
     public void rotate(float deg, float px, float py) { g.rotate(Math.toRadians(deg), px, py); }
     private void paint(Shape s, Paint p) {
