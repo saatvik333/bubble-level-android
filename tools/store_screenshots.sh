@@ -48,8 +48,9 @@ tap() {
 scene() {
     local out=$1 theme=$2 gravity=$3 control=${4:-}
     adb shell pm clear "$PKG" >/dev/null
-    adb shell am start -W -n "$PKG/.MainActivity" >/dev/null
+    # Reading first, so the app's filter starts settled instead of easing in from the last pose.
     adb emu sensor set acceleration "$gravity" >/dev/null
+    adb shell am start -W -n "$PKG/.MainActivity" >/dev/null
     sleep 2
     local i
     for i in "${!THEMES[@]}"; do
@@ -79,14 +80,14 @@ capture() {
     done
 }
 
-SURFACE_TILTED="0.31:0.42:9.79"    # ~1.8° / ~2.5°
+SURFACE_TILTED="0.70:0.95:9.739"   # 6.9° (X +4.1°, Y +5.6°)
 SURFACE_LEVEL="0:0:9.81"
-EDGE_TILTED="0.21:9.80:0.0"        # standing on its edge, ~1.2° off
+EDGE_TILTED="0.72:9.79:0.0"        # standing on its edge, 4.2° off
 
 capture phoneScreenshots 1080x2160 420 \
     "Aurum $SURFACE_TILTED" \
-    "Celeste $SURFACE_LEVEL" \
     "Ambra $EDGE_TILTED" \
+    "Celeste $SURFACE_LEVEL" \
     "Salvia $SURFACE_TILTED Calibrate" \
     "Rosa $SURFACE_TILTED Settings" \
     "Notte $SURFACE_TILTED"

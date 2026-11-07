@@ -4,9 +4,9 @@ A calm bubble level for Android: flat colour, hairlines, one accent, a circle mo
 column, and named themes switched from the header. No ads, no tracking, no internet permission.
 
 <p>
-  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/1.png" width="19%" alt="Surface mode, Aurum theme, bubble just off centre">
-  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/2.png" width="19%" alt="Surface mode, Celeste theme, level at 0.0°">
-  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/3.png" width="19%" alt="Edge mode, Ambra theme, tube level with the left side low">
+  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/1.png" width="19%" alt="Surface mode, Aurum theme, tilted 6.9°">
+  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/2.png" width="19%" alt="Edge mode, Ambra theme, tube 4.2° off level">
+  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/3.png" width="19%" alt="Surface mode, Celeste theme, level at 0.0°">
   <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/4.png" width="19%" alt="Calibration step 2 of 2, Salvia theme">
   <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/5.png" width="19%" alt="Settings page, Rosa theme">
 </p>
