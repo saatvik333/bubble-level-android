@@ -12,8 +12,8 @@ column, and named themes switched from the header. No ads, no tracking, no inter
 </p>
 
 Android 6.0 (API 23) and later. Download the APK from
-[Releases](https://github.com/saatvik333/level-android/releases);
-[privacy policy](https://saatvik333.github.io/level-android/privacy).
+[Releases](https://github.com/saatvik333/bubble-level-android/releases);
+[privacy policy](https://saatvik333.github.io/bubble-level-android/privacy).
 
 ## Build
 
@@ -24,9 +24,9 @@ python3 with Pillow, and zip.
     ./build.sh                     # build/Level.aab (Play), build/Level.apk (universal), build/mapping.txt
     NEW_KEYSTORE=1 ./build.sh      # first build on a machine without the upload key: creates one
 
-The upload key lives outside the repository at `~/.local/share/level-android/upload.jks` (`KEYSTORE`
+The upload key lives outside the repository at `~/.local/share/bubble-level-android/upload.jks` (`KEYSTORE`
 overrides it). Its password comes from `KEYSTORE_PASS` or the desktop keyring
-(`secret-tool lookup service level-android key upload-keystore`). `VERSION_CODE` / `VERSION_NAME`
+(`secret-tool lookup service bubble-level-android key upload-keystore`). `VERSION_CODE` / `VERSION_NAME`
 override the version; every Play upload needs a higher `VERSION_CODE`.
 
 Publishing on Google Play, with every Play Console answer: [docs/play-console.md](docs/play-console.md).

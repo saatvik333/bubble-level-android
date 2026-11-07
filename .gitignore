@@ -1,6 +1,6 @@
 # build output
 /build/
-# signing keys never go in the repo (the upload key lives in ~/.local/share/level-android/)
+# signing keys never go in the repo (the upload key lives in ~/.local/share/bubble-level-android/)
 *.jks
 *.keystore
 # generated launcher PNGs are rebuilt by tools/make_icons.py

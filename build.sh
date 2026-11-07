@@ -14,7 +14,7 @@ MIN_SDK=23
 TARGET_SDK=36
 VERSION_CODE=${VERSION_CODE:-1}
 VERSION_NAME=${VERSION_NAME:-1.0}
-KS=${KEYSTORE:-${XDG_DATA_HOME:-$HOME/.local/share}/level-android/upload.jks}
+KS=${KEYSTORE:-${XDG_DATA_HOME:-$HOME/.local/share}/bubble-level-android/upload.jks}
 KS_ALIAS=${KEYSTORE_ALIAS:-upload}
 OUT=build
 
@@ -30,9 +30,9 @@ command -v "$BUNDLETOOL" >/dev/null || { echo "error: bundletool not on PATH (or
 # Upload key: Play App Signing holds the app signing key; this key only authenticates uploads.
 # The password comes from KEYSTORE_PASS or, failing that, the desktop keyring.
 if [ -z "${KEYSTORE_PASS:-}" ] && command -v secret-tool >/dev/null; then
-    KEYSTORE_PASS=$(secret-tool lookup service level-android key upload-keystore || true)
+    KEYSTORE_PASS=$(secret-tool lookup service bubble-level-android key upload-keystore || true)
 fi
-: "${KEYSTORE_PASS:?set KEYSTORE_PASS (or store it: secret-tool store --label=level-android service level-android key upload-keystore)}"
+: "${KEYSTORE_PASS:?set KEYSTORE_PASS (or store it: secret-tool store --label=bubble-level-android service bubble-level-android key upload-keystore)}"
 export KEYSTORE_PASS
 if [ ! -f "$KS" ]; then
     if [ "${NEW_KEYSTORE:-0}" != 1 ]; then

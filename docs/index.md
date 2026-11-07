@@ -8,4 +8,4 @@ A calm bubble level for Android that you can calibrate on any firm surface. No a
 no permissions.
 
 - [Privacy policy](privacy)
-- [Source code and downloads](https://github.com/saatvik333/level-android)
+- [Source code and downloads](https://github.com/saatvik333/bubble-level-android)

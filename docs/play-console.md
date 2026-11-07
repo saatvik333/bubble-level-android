@@ -12,8 +12,8 @@ Everything Play Console asks for, with the answer to give. The store text and gr
     ./build.sh                                  # build/Level.aab
     VERSION_CODE=2 VERSION_NAME=1.1 ./build.sh  # every later upload needs a higher VERSION_CODE
 
-The bundle is signed with the **upload key** at `~/.local/share/level-android/upload.jks`
-(alias `upload`, password in the desktop keyring under `service level-android key upload-keystore`;
+The bundle is signed with the **upload key** at `~/.local/share/bubble-level-android/upload.jks`
+(alias `upload`, password in the desktop keyring under `service bubble-level-android key upload-keystore`;
 `build.sh` reads it from there). Back up the keystore file and the password together. If they are
 lost, Play support can reset the upload key; the app itself keeps its Play signing key.
 
@@ -35,7 +35,7 @@ Upload certificate SHA-256: `89:49:B9:EB:41:73:15:81:F0:09:C2:91:67:48:52:A1:B0:
 
 | Section | Answer |
 | --- | --- |
-| Privacy policy | `https://saatvik333.github.io/level-android/privacy` |
+| Privacy policy | `https://saatvik333.github.io/bubble-level-android/privacy` |
 | App access | All functionality is available without any access restrictions |
 | Ads | No, my app does not contain ads |
 | Content rating | Email: your contact email. Category: **All other app types**. Answer **No** to every question (no violence, sexuality, language, controlled substances, gambling, user interaction, sharing location, digital purchases). Expected result: Everyone / PEGI 3 / IARC 3+ |
@@ -61,7 +61,7 @@ Upload certificate SHA-256: `89:49:B9:EB:41:73:15:81:F0:09:C2:91:67:48:52:A1:B0:
 | 10-inch tablet screenshots | `images/tenInchScreenshots/1–3.png` (2560×1600) |
 
 **Store settings:** category **Tools**; contact email `saatvik333sharma@gmail.com`; website
-`https://github.com/saatvik333/level-android`.
+`https://github.com/saatvik333/bubble-level-android`.
 
 Screenshots are reproducible: start an emulator, install the build, run `tools/store_screenshots.sh`.
 

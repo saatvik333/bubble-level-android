@@ -17,4 +17,4 @@ Calibration doesn't need a perfectly flat table. Take a reading, turn the phone 
 <b>Privacy</b>
 The app has no ads, accounts or analytics. It doesn't have permission to use the internet, so nothing you do in it leaves your phone.
 
-Source code: https://github.com/saatvik333/level-android
+Source code: https://github.com/saatvik333/bubble-level-android
