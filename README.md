@@ -11,7 +11,7 @@ column, and named themes switched from the header. No ads, no tracking, no inter
   <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/5.png" width="19%" alt="Settings page, Rosa theme">
 </p>
 
-Android 6.0 (API 23) and later. Download the APK from
+Android 7.0 (API 24) and later. Download the APK from
 [Releases](https://github.com/saatvik333/bubble-level-android/releases);
 [privacy policy](https://saatvik333.github.io/bubble-level-android/privacy).
 

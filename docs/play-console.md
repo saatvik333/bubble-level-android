@@ -10,7 +10,7 @@ Everything Play Console asks for, with the answer to give. The store text and gr
 ## 1. Build the upload
 
     ./build.sh                                  # build/Level.aab
-    VERSION_CODE=2 VERSION_NAME=1.1 ./build.sh  # every later upload needs a higher VERSION_CODE
+    VERSION_CODE=3 VERSION_NAME=1.1 ./build.sh  # every later upload needs a higher VERSION_CODE
 
 The bundle is signed with the **upload key** at `~/.local/share/bubble-level-android/upload.jks`
 (alias `upload`, password in the desktop keyring under `service bubble-level-android key upload-keystore`;
@@ -74,7 +74,7 @@ Personal developer accounts created after 13 November 2023 must run a closed tes
 1. **Test and release → Testing → Closed testing → Create track.** Countries: all. Testers: an email
    list or a Google Group with 12 or more people (aim for 15–20; anyone who opts out restarts their 14 days).
 2. **Create release.** App signing: keep **Google-generated app signing key**. Upload
-   `build/Level.aab`. Release notes: `changelogs/1.txt`. Review → roll out.
+   `build/Level.aab`. Release notes: `changelogs/2.txt`. Review → roll out.
 3. Share the opt-in link. Testers must accept it and install from Play, and stay opted in.
 4. Collect feedback (Play's **Testing feedback** page, or email) and ship at least one update to the
    closed track based on it; the production application asks what changed.
