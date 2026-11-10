@@ -35,11 +35,21 @@ keys=$(adb shell dumpsys notification --noredact | grep 'NotificationRecord(' | 
 for key in $keys; do adb shell cmd notification snooze --for 3600000 "'$key'" >/dev/null; done
 
 # Taps the centre of the first accessibility node whose description starts with $1.
+# A slow emulator can raise "System UI isn't responding" over the app: answer Wait and look again.
 tap() {
-    adb shell uiautomator dump /sdcard/ui.xml >/dev/null
-    local x1 y1 x2 y2
-    read -r x1 y1 x2 y2 < <(adb shell cat /sdcard/ui.xml | grep -o "content-desc=\"$1[^\"]*\" [^>]*bounds=\"[^\"]*\"" \
-        | head -1 | grep -o 'bounds="[^"]*"' | tr -c '0-9\n' ' ') || true
+    local x1 y1 x2 y2 xml i
+    for i in 1 2 3; do
+        adb shell uiautomator dump /sdcard/ui.xml >/dev/null
+        xml=$(adb shell cat /sdcard/ui.xml)
+        read -r x1 y1 x2 y2 < <(grep -o "content-desc=\"$1[^\"]*\" [^>]*bounds=\"[^\"]*\"" <<<"$xml" \
+            | head -1 | grep -o 'bounds="[^"]*"' | tr -c '0-9\n' ' ') || true
+        [ -z "${y2:-}" ] || break
+        read -r x1 y1 x2 y2 < <(grep -o 'text="Wait"[^>]*bounds="[^"]*"' <<<"$xml" \
+            | head -1 | grep -o 'bounds="[^"]*"' | tr -c '0-9\n' ' ') || true
+        [ -n "${y2:-}" ] && adb shell input tap $(( (x1 + x2) / 2 )) $(( (y1 + y2) / 2 ))
+        x1= y1= x2= y2=
+        sleep 3
+    done
     [ -n "${y2:-}" ] || { echo "error: no control '$1' on screen" >&2; exit 1; }
     adb shell input tap $(( (x1 + x2) / 2 )) $(( (y1 + y2) / 2 ))
 }
@@ -52,12 +62,19 @@ scene() {
     adb emu sensor set acceleration "$gravity" >/dev/null
     adb shell am start -W -n "$PKG/.MainActivity" >/dev/null
     sleep 2
-    local i
-    for i in "${!THEMES[@]}"; do
-        [ "${THEMES[$i]}" = "$theme" ] && break
-        tap "Next theme"
+    if [ "$theme" != "${THEMES[0]}" ]; then
+        tap "Settings"
+        sleep 0.8
+        # The theme swatches are the last row: scroll there first on short screens.
+        local w h
+        read -r w h < <(adb shell wm size | tail -1 | grep -o '[0-9]*x[0-9]*' | tr 'x' ' ')
+        adb shell input swipe $((w / 2)) $((h * 4 / 5)) $((w / 2)) $((h / 5)) 300
+        sleep 0.8
+        tap "Theme $theme"
         sleep 0.6
-    done
+        tap "Back"
+        sleep 0.8
+    fi
     [ -z "$control" ] || tap "$control"
     sleep 2
     adb exec-out screencap -p > "$out"

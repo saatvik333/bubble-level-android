@@ -1,7 +1,7 @@
 # Bubble Level – Spot On
 
 A calm bubble level for Android: flat colour, hairlines, one accent, a circle motif, a centred
-column, and named themes switched from the header. No ads, no tracking, no internet permission.
+instrument, and named themes chosen in Settings. No ads, no tracking, no internet permission.
 
 <p>
   <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/1.png" width="19%" alt="Surface mode, Aurum theme, tilted 6.9°">
@@ -38,7 +38,9 @@ recaptures the screenshots from an emulator, `tools/make_feature_graphic.py` red
     src/me/saatvik/level/
       LevelEngine.java   sensor math, adaptive filter, mode hysteresis, two-step reversal calibration (no Android deps)
       Renderer.java      all drawing, android.graphics only
-      LevelView.java     animation (spring bubble, theme/page/mode crossfades), input, haptics
+      LevelView.java     animation (spring bubble, theme/page/mode crossfades, sliding option highlight), input, haptics, accessibility nodes
+      Settings.java      preferences; calibration in a no-backup file
+      Ui.java            per-frame state LevelView writes and Renderer reads
       MainActivity.java  sensors, window/insets, predictive back, Material You palette on 12+
       Palette.java       theme tokens: bg, fg, dim, line, accent, onAccent
     tools/preview/       AWT-backed android.graphics stubs: renders Renderer on the JVM; EngineTest
@@ -53,10 +55,14 @@ recaptures the screenshots from an emulator, `tools/make_feature_graphic.py` red
   Edge mode rotates the instrument to the nearest 90° so the tube stays world-horizontal.
 - Calibration: place, capture; turn 180° about the vertical (gyro-detected, or tap Ready); capture.
   The two readings cancel the surface slope and leave the sensor offset, so any firm surface works.
-  With a gyroscope the measured turn angle is used, so an imprecise turn still solves exactly.
+  With a gyroscope the measured net turn between the two resting poses is used, so an imprecise turn
+  still solves exactly, however the phone was carried (picked up, held tipped, spun on its own axis).
   Surface and edge offsets are calibrated and applied separately (a camera bump or an edge has its
   own geometry). Calibration is stored outside backups: it never moves to another phone.
-- Tap the instrument or the pause icon to hold the reading. Swipe sideways to change theme.
+- Tap the instrument or the pause icon to hold the reading.
+- Settings is one list: units, level tolerance and mode as segmented choices (every option visible),
+  haptic feedback and keep-screen-on switches, calibration status with Reset, and the theme swatches
+  last. Reset asks first (Keep / Erase) and says so if the change could not be saved.
 - Every control is exposed to TalkBack and Switch Access as a virtual node.
 
 ## Credits

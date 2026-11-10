@@ -162,8 +162,8 @@ public final class MainActivity extends Activity implements SensorEventListener,
     }
 
     @Override
-    public void onCalibrationChanged() {
-        settings.saveCalibration(calibrationFile());
+    public boolean onCalibrationChanged() {
+        return settings.saveCalibration(calibrationFile());
     }
 
     /** Excluded from cloud backup and device-to-device transfer: an offset is specific to one sensor. */

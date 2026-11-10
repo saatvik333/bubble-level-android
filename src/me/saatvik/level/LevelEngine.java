@@ -16,6 +16,9 @@ package me.saatvik.level;
  * surface slope t turns with the device when it is rotated about the vertical. Two readings
  * r1 = b + t and r2 = b + R(phi) t give t = (I - R(phi))^-1 (r1 - r2) and b = r1 - t; with
  * phi = 180 degrees this is b = (r1 + r2) / 2. Works on a surface that is not level.
+ * phi is the net rotation between the two resting poses: the gyroscope is integrated in 3-D and
+ * twisted about the first pose's vertical, so the path between them (picked up, held tipped,
+ * spun about the phone's own axis) does not matter.
  *
  * The offset depends on the pose (a camera bump tilts the phone lying flat, each edge has its own
  * geometry, and an in-plane sensor misalignment changes sign between opposite edges), so every
@@ -43,8 +46,8 @@ final class LevelEngine {
     private static final long STILL_NS = 450_000_000L;    // must stay inside the cone this long
     private static final long CAPTURE_NS = 1_200_000_000L;
     private static final float MAX_BIAS = 1.0f;           // m/s^2, ~6 deg; larger means the setup moved
-    private static final float TURN_RAD = 2.6f;           // ~150 deg of yaw: advance to step 2 on its own
-    private static final float TURN_MIN = 2.1f, TURN_MAX = 4.2f;   // accepted measured turn, 120..240 deg
+    private static final float TURN_RAD = 2.6f;           // ~150 deg net turn: advance to step 2 on its own
+    private static final float TURN_MIN = 2.1f;           // accepted net turn, 120..180 deg either way
     private static final float NOT_TURNED = 0.8f;         // < ~45 deg measured: Ready is refused
     private static final float EDGE_TURN_TOL = 0.15f;     // rad (~9 deg): edges only solve for a 180 turn
     private static final float GYRO_DEAD = 0.06f;         // rad/s, dead zone while the gyro bias is unknown
@@ -103,7 +106,8 @@ final class LevelEngine {
     boolean calEdge;                   // pose being calibrated: false = lying flat, true = on an edge
     int calHint, calFail;
     private int calAxis = -1, calSign;
-    private float yaw;
+    private float yaw;                 // net turn about the step 1 vertical, rad, (-pi, pi]
+    private float qw = 1f, qx, qy, qz; // gyro-integrated rotation from the step 1 pose to now
     private boolean moved;
     private double gbx, gby, gbz;      // gyro samples while still in step 1, for its bias
     private int gbn;
@@ -215,10 +219,25 @@ final class LevelEngine {
         }
         if ((cal == CAL_TURN || cal == CAL_STEP2) && has) {
             if (gyroMag > MOVED_GYRO) moved = true;
-            float n = (float) Math.sqrt(fx * fx + fy * fy + fz * fz);
-            // rotation rate about the vertical, bias removed when it was measured
-            float w = ((wx - biasX) * fx + (wy - biasY) * fy + (wz - biasZ) * fz) / n;
-            if (Math.abs(w) > (biasKnown ? GYRO_DEAD_KNOWN : GYRO_DEAD)) yaw += w * dt;
+            float bx = wx - biasX, by = wy - biasY, bz = wz - biasZ;
+            float m = (float) Math.sqrt(bx * bx + by * by + bz * bz);
+            if (m > (biasKnown ? GYRO_DEAD_KNOWN : GYRO_DEAD)) {
+                // q <- q * exp(w dt / 2): body rates compose on the right
+                float h = m * dt / 2f, s = (float) Math.sin(h) / m;
+                float dw = (float) Math.cos(h), dx = bx * s, dy = by * s, dz = bz * s;
+                float nw = qw * dw - qx * dx - qy * dy - qz * dz;
+                float nx = qw * dx + qx * dw + qy * dz - qz * dy;
+                float ny = qw * dy - qx * dz + qy * dw + qz * dx;
+                float nz = qw * dz + qx * dy - qy * dx + qz * dw;
+                float qn = (float) Math.sqrt(nw * nw + nx * nx + ny * ny + nz * nz);
+                qw = nw / qn; qx = nx / qn; qy = ny / qn; qz = nz / qn;
+                // twist about the step 1 vertical, wrapped to (-pi, pi]: a 360 is no turn at all
+                float n1 = (float) Math.sqrt(c1x * c1x + c1y * c1y + c1z * c1z);
+                float p = (qx * c1x + qy * c1y + qz * c1z) / n1;
+                yaw = 2f * (float) Math.atan2(p, qw);
+                if (yaw > Math.PI) yaw -= 2f * (float) Math.PI;
+                else if (yaw <= -Math.PI) yaw += 2f * (float) Math.PI;
+            }
             if (Math.abs(yaw) > NOT_TURNED) moved = true;
             if (cal == CAL_TURN && Math.abs(yaw) > TURN_RAD) enterStep2();
         }
@@ -372,6 +391,7 @@ final class LevelEngine {
             cal = CAL_TURN;
             moved = false;
             yaw = 0f;
+            qw = 1f; qx = qy = qz = 0f;
             resetCapture();
             events |= EV_CAPTURE;
             return;
@@ -383,7 +403,7 @@ final class LevelEngine {
         boolean gyro = gyroSeen;
         float turn = gyro ? Math.abs(yaw) : (float) Math.PI;
         boolean ok2;
-        if (gyro && (turn < TURN_MIN || turn > TURN_MAX
+        if (gyro && (turn < TURN_MIN
                 || (calAxis != 2 && Math.abs(turn - (float) Math.PI) > EDGE_TURN_TOL))) {
             calFail = FAIL_TURN;
             ok2 = false;

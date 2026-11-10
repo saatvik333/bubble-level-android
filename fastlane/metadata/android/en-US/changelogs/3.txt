@@ -1,0 +1,1 @@
+New Settings page: every option visible at once, proper switches, and themes moved here (the swipe to change theme is gone). Reset calibration now asks before erasing. Calibration step 2 now completes when you pick the phone up to turn it around.

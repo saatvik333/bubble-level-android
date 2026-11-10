@@ -11,7 +11,7 @@ Calibration doesn't need a perfectly flat table. Take a reading, turn the phone 
 • Tap to hold the reading, then pick the phone up to read it
 • Lock it to flat or edge mode when you need to
 • The screen stays on while you work (you can turn this off)
-• Six colour themes, plus one that matches your wallpaper on Android 12 and later. Swipe sideways to change.
+• Six colour themes, plus one that matches your wallpaper on Android 12 and later. Pick one in Settings.
 • Works with TalkBack and Switch Access
 
 <b>Privacy</b>

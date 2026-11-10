@@ -8,7 +8,6 @@ final class Ui {
     int width, height, insetL, insetT, insetR, insetB;
 
     Palette pal = Palette.BUILT_IN[0];
-    String themeName = "";
     float pageT;                 // 0 = level, 1 = settings
 
     // instrument
@@ -30,10 +29,15 @@ final class Ui {
     String calTitle = "";
     float calProgress;
 
-    // settings page
-    String unitsLabel = "", tolLabel = "", modeLabel = "";
-    boolean calibrated;
+    // settings page: option labels, the selected index, and its animated position for the slider
+    String[] unitOpts = {}, tolOpts = {}, modeOpts = {};
+    int units, tolIdx, mode;
+    float unitsPos, tolPos, modePos;
+    Palette[] themes = {};
+    int themeIdx;
+    boolean calibrated, resetConfirm;
     String calSummary = "";      // calibrated poses, e.g. "face up, 1 edge"
+    String calNote;              // storage failure to show on the calibration row, null when none
     float hapticsT, keepOnT;
     float settingsScroll;        // px, written by LevelView
     float settingsMaxScroll;     // px, written by Renderer

@@ -78,7 +78,8 @@ final class Settings {
         }
     }
 
-    void saveCalibration(File f) {
+    /** Writes atomically (temp file, then rename). Returns false when nothing was saved. */
+    boolean saveCalibration(File f) {
         File tmp = new File(f.getPath() + ".tmp");
         try (DataOutputStream out = new DataOutputStream(new FileOutputStream(tmp))) {
             out.writeInt(CAL_VERSION);
@@ -87,9 +88,11 @@ final class Settings {
             out.writeInt(calMask);
         } catch (IOException e) {
             tmp.delete();
-            return;
+            return false;
         }
-        if (!tmp.renameTo(f)) tmp.delete();
+        if (tmp.renameTo(f)) return true;
+        tmp.delete();
+        return false;
     }
 
     private static boolean ok(float v) {

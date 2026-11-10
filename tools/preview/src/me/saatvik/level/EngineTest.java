@@ -281,16 +281,22 @@ public final class EngineTest {
         check("hand-held: no capture", e.cal, LevelEngine.CAL_STEP1, 0);
 
         // R-8. physical simulation: imperfect 155 deg turn on a 3 deg slope, face up and face down
-        simTurn("up", 155f, 3f, -1.2f, new float[]{0.08f, -0.06f, 0.03f}, true, 0.012f);
-        simTurn("up", -170f, 2f, 1.5f, new float[]{-0.05f, 0.04f, 0f}, true, 0.012f);
-        simTurn("down", 160f, 2.5f, 1f, new float[]{0.06f, 0.05f, -0.02f}, true, 0.012f);
+        simTurn("up", 155f, 0f, 3f, -1.2f, new float[]{0.08f, -0.06f, 0.03f}, true, 0.012f);
+        simTurn("up", -170f, 0f, 2f, 1.5f, new float[]{-0.05f, 0.04f, 0f}, true, 0.012f);
+        simTurn("down", 160f, 0f, 2.5f, 1f, new float[]{0.06f, 0.05f, -0.02f}, true, 0.012f);
         // edges: only a half turn solves; a 160 deg turn on a slope is refused, not mis-solved
-        simTurn("bottom", 176f, 2f, 0.7f, new float[]{0.05f, 0f, 0f}, true, 0.02f);
-        simTurn("top", -183f, 2f, 2.1f, new float[]{-0.04f, 0f, 0f}, true, 0.02f);
-        simTurn("left", 178f, 2f, -0.4f, new float[]{0f, 0.06f, 0f}, true, 0.02f);
-        simTurn("right", 181f, 1.5f, 2.9f, new float[]{0f, -0.03f, 0f}, true, 0.02f);
-        simTurn("bottom", 160f, 2f, 0.7f, new float[]{0.05f, 0f, 0f}, false, 0f);
-        simTurn("left", 125f, 2f, 0.7f, new float[]{0f, 0.05f, 0f}, false, 0f);
+        simTurn("bottom", 176f, 0f, 2f, 0.7f, new float[]{0.05f, 0f, 0f}, true, 0.02f);
+        simTurn("top", -183f, 0f, 2f, 2.1f, new float[]{-0.04f, 0f, 0f}, true, 0.02f);
+        simTurn("left", 178f, 0f, 2f, -0.4f, new float[]{0f, 0.06f, 0f}, true, 0.02f);
+        simTurn("right", 181f, 0f, 1.5f, 2.9f, new float[]{0f, -0.03f, 0f}, true, 0.02f);
+        simTurn("bottom", 160f, 0f, 2f, 0.7f, new float[]{0.05f, 0f, 0f}, false, 0f);
+        simTurn("left", 125f, 0f, 2f, 0.7f, new float[]{0f, 0.05f, 0f}, false, 0f);
+        // R-8b. picked up, held tilted and spun about its own axis, set back down: the net turn
+        //       counts, not the rate about the vertical (180 cos 45 = 127 deg would stall step 2)
+        simTurn("up", 180f, 45f, 3f, -1.2f, new float[]{0.08f, -0.06f, 0.03f}, true, 0.012f);
+        simTurn("down", -175f, 35f, 2f, 0.4f, new float[]{-0.04f, 0.05f, 0f}, true, 0.012f);
+        simTurn("bottom", 180f, 30f, 2f, 0.7f, new float[]{0.05f, 0f, 0f}, true, 0.02f);
+        simTurn("left", -179f, 25f, 1.5f, 2.2f, new float[]{0f, -0.04f, 0f}, true, 0.02f);
 
         // R-9. a full 360 is not a reversal
         e = eng();
@@ -564,10 +570,11 @@ public final class EngineTest {
 
     /**
      * Phone resting on a sloped surface in a pose ("up", "down", "bottom", "top", "left", "right":
-     * which way it lies or which edge is down), turned by turnDeg about the surface normal with
-     * the gyroscope running. Checks the offset lands in that pose's slot.
+     * which way it lies or which edge is down), turned by turnDeg about its own surface axis with
+     * the gyroscope running. With liftDeg > 0 it is first tipped by that much, spun while held
+     * tipped, then set back down. Checks the offset lands in that pose's slot.
      */
-    static void simTurn(String pose, float turnDeg, float slopeDeg, float slopeDir, float[] bias,
+    static void simTurn(String pose, float turnDeg, float liftDeg, float slopeDeg, float slopeDir, float[] bias,
                         boolean expectDone, float tol) {
         double sx = Math.tan(Math.toRadians(slopeDeg)) * Math.cos(slopeDir), sy = Math.tan(Math.toRadians(slopeDeg)) * Math.sin(slopeDir);
         double[] nrm = unit(new double[]{-sx, -sy, 1});             // surface normal, world
@@ -599,26 +606,19 @@ public final class EngineTest {
             feed(e, r, 0.05f, 0.01f);
             secs1 += 0.05f;
         }
-        String name = String.format("sim %s turn %.0f slope %.1f", pose, turnDeg, slopeDeg);
+        String name = String.format("sim %s turn %.0f lift %.0f slope %.1f", pose, turnDeg, liftDeg, slopeDeg);
         if (secs1 > 2.5f) System.out.printf("   %s: step 1 took %.2f s%n", name, secs1);
         if (e.cal != LevelEngine.CAL_TURN) { check(name + " step1", e.cal, LevelEngine.CAL_TURN, 0); return; }
-        double total = Math.toRadians(turnDeg), secs = 1.5;
-        int steps = (int) (secs * 200);
-        double rate = total / secs;
-        for (int i = 0; i < steps; i++) {
-            X = rotate(X, nrm, total / steps);
-            Y = rotate(Y, nrm, total / steps);
-            Z = rotate(Z, nrm, total / steps);
-            t += 5_000_000L;
-            double[] w = scale(nrm, rate);                           // world angular velocity
-            e.onGyro((float) dot(X, w), (float) dot(Y, w), (float) dot(Z, w), t);
-            if (i % 4 == 0) {
-                float[] sm = jitter(body(X, Y, Z, bias), 0.25f);     // handling
-                e.onGravity(sm[0], sm[1], sm[2], t);
-            }
-        }
+        double[][] f = {X, Y, Z};
+        int ax = pose.equals("up") || pose.equals("down") ? 2 : pose.equals("bottom") || pose.equals("top") ? 1 : 0;
+        double[] want = f[ax].clone();                                // the surface axis, where it must return
+        if (liftDeg != 0f) f = move(e, f, unit(cross(nrm, new double[]{0.6, -0.8, 0})), Math.toRadians(liftDeg), 0.4, bias);
+        f = move(e, f, f[ax].clone(), Math.toRadians(turnDeg), 1.5, bias);
+        double back = Math.acos(Math.max(-1, Math.min(1, dot(f[ax], want))));
+        if (back > 1e-6) f = move(e, f, unit(cross(f[ax], want)), back, 0.4, bias);
+        if (Math.abs(turnDeg) > 160f) check(name + " turn detected", e.cal, LevelEngine.CAL_STEP2, 0);
         if (e.cal == LevelEngine.CAL_TURN) e.manualReady();
-        feed(e, body(X, Y, Z, bias), 3f, 0.01f);
+        feed(e, body(f[0], f[1], f[2], bias), 3f, 0.01f);
         if (!expectDone) {
             check(name + " rejected", e.cal, LevelEngine.CAL_FAILED, 0);
             check(name + " reason turn", e.calFail, LevelEngine.FAIL_TURN, 0);
@@ -634,6 +634,23 @@ public final class EngineTest {
             case "left":   check(name + " y", e.edge[LevelEngine.EDGE_LEFT], bias[1], tol); break;
             default:       check(name + " y", e.edge[LevelEngine.EDGE_RIGHT], bias[1], tol); break;
         }
+    }
+
+    /** Rotates the frame about world axis k by ang over secs with the gyroscope running, hand-held. */
+    static double[][] move(LevelEngine e, double[][] f, double[] k, double ang, double secs, float[] bias) {
+        int steps = (int) (secs * 200);
+        double rate = ang / secs;
+        double[] w = scale(k, rate);                                  // world angular velocity
+        for (int i = 0; i < steps; i++) {
+            f = new double[][]{rotate(f[0], k, ang / steps), rotate(f[1], k, ang / steps), rotate(f[2], k, ang / steps)};
+            t += 5_000_000L;
+            e.onGyro((float) dot(f[0], w), (float) dot(f[1], w), (float) dot(f[2], w), t);
+            if (i % 4 == 0) {
+                float[] sm = jitter(body(f[0], f[1], f[2], bias), 0.25f);   // handling
+                e.onGravity(sm[0], sm[1], sm[2], t);
+            }
+        }
+        return f;
     }
 
     static float[] body(double[] X, double[] Y, double[] Z, float[] b) {

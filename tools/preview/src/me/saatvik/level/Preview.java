@@ -98,6 +98,15 @@ public final class Preview {
         u = sized("Rosa", 412, 914, 2.625f, 1f, 32, 24);
         settings(u); u.calSummary = "face up, face down, 4 edges";
         shot(r, u, out + "/9_settings_summary.png");
+        u = sized("Notte", 412, 914, 2.625f, 1f, 32, 24);
+        settings(u); u.calibrated = false; u.units = 2; u.unitsPos = 2f; u.mode = 1; u.modePos = 1.4f;
+        shot(r, u, out + "/10_settings_uncalibrated_dark.png");
+        u = sized("Celeste", 320, 569, 2f, 1.3f, 24, 48);
+        settings(u); u.resetConfirm = true; u.settingsScroll = 1e9f;
+        shot(r, u, out + "/n4_narrow_reset_confirm.png");
+        u = sized("Salvia", 412, 914, 2.625f, 1f, 32, 24);
+        settings(u); u.calNote = "Couldn't save. It applies until the app closes";
+        shot(r, u, out + "/11_settings_save_failed.png");
 
         // landscape window (large screen ignoring the portrait request)
         u = sized("Aurum", 914, 412, 2.625f, 1f, 24, 24);
@@ -107,8 +116,11 @@ public final class Preview {
 
     static void settings(Ui u) {
         u.pageT = 1f;
-        u.unitsLabel = "Degrees"; u.tolLabel = "± 0.2°"; u.modeLabel = "Auto";
-        u.hapticsT = 1f; u.keepOnT = 0f; u.calibrated = true;
+        u.unitOpts = new String[]{"Degrees", "Percent", "mm/m", "in/ft"};
+        u.tolOpts = new String[]{"0.1°", "0.2°", "0.3°", "0.5°", "1.0°"};
+        u.modeOpts = new String[]{"Auto", "Surface", "Edge"};
+        u.tolIdx = 1; u.tolPos = 1f;
+        u.hapticsT = 1f; u.keepOnT = 0f; u.calibrated = true; u.calSummary = "face up";
     }
 
     static void cal1(Ui u) {
@@ -133,8 +145,8 @@ public final class Preview {
         u.height = Math.round(hDp * density);
         u.insetT = Math.round(topDp * density);
         u.insetB = Math.round(bottomDp * density);
-        for (Palette p : Palette.BUILT_IN) if (p.name.equals(theme)) u.pal = p;
-        u.themeName = theme;
+        u.themes = Palette.BUILT_IN;
+        for (int i = 0; i < u.themes.length; i++) if (u.themes[i].name.equals(theme)) { u.pal = u.themes[i]; u.themeIdx = i; }
         u.guide2 = (float) Math.tanh(2f / 8f);
         u.guide5 = (float) Math.tanh(5f / 8f);
         u.edgeTicks[0] = (float) Math.tanh(1f / 6f);

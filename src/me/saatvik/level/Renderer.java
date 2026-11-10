@@ -10,19 +10,20 @@ import android.graphics.Typeface;
  * Draws one frame from a {@link Ui}. Depends on android.graphics only.
  *
  * Visual grammar: flat colour, hairline strokes, one accent, circles as the primary shape,
- * everything centred on a single column, outlined pills for actions, filled accent circles
- * for "on" states, theme name flanked by chevrons at the top.
+ * the instrument centred on a single column, outlined pills for actions, the accent fill for
+ * "on" and "selected". The level page has no header; the settings page is a list of rows split
+ * by hairlines under a centred title.
  *
  * Layout adapts to the window: the surface instrument stacks vial over readout, moves the readout
  * beside the vial in short wide windows, and scales down as a last resort; the edge instrument
  * scales to fit its square; the settings page scrolls.
  */
 final class Renderer {
-    static final int H_THEME_PREV = 1, H_THEME_NEXT = 2, H_SETTINGS = 3, H_CALIBRATE = 4, H_HOLD = 5,
-            H_READOUT = 6, H_BACK = 7,
-            H_UNITS_PREV = 10, H_UNITS_NEXT = 11, H_TOL_PREV = 12, H_TOL_NEXT = 13,
-            H_MODE_PREV = 14, H_MODE_NEXT = 15, H_HAPTIC = 16, H_KEEPON = 17, H_RESET = 18,
-            H_CAL_CANCEL = 20, H_CAL_READY = 21;
+    static final int H_SETTINGS = 3, H_CALIBRATE = 4, H_HOLD = 5, H_READOUT = 6, H_BACK = 7,
+            H_HAPTIC = 16, H_KEEPON = 17, H_RESET = 18, H_RESET_KEEP = 19, H_CAL_CANCEL = 20, H_CAL_READY = 21,
+            H_RESET_ERASE = 22;
+    /** Option ids: base + index. */
+    static final int H_UNITS = 30, H_TOL = 40, H_MODE = 50, H_THEME = 60;
 
     private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -87,33 +88,25 @@ final class Renderer {
     // ---- header ------------------------------------------------------------------------------
 
     private void drawHeader(Canvas c, Palette p) {
-        float cy = u.insetT + 32f * dp, cx = cx0;
+        if (u.pageT <= 0.001f) return;
+        float cy = u.insetT + 32f * dp;
+        a = u.pageT;
         text.setTypeface(regular);
-        text.setTextSize(14f * sp);
+        text.setTextSize(16f * sp);
         text.setColor(col(p.fg));
-        float tw = text.measureText(u.themeName);
-        textCentered(c, u.themeName, cx, cy);
-        float off = tw / 2f + 22f * dp;
-        chevron(c, cx - off, cy, -1, 5f * dp, 1.5f * dp, col(p.dim));
-        chevron(c, cx + off, cy, 1, 5f * dp, 1.5f * dp, col(p.dim));
-        hit(H_THEME_PREV, cx - off - 30f * dp, cy - 24f * dp, cx - 1f, cy + 24f * dp, cx - off, cy, 20f * dp);
-        hit(H_THEME_NEXT, cx + 1f, cy - 24f * dp, cx + off + 30f * dp, cy + 24f * dp, cx + off, cy, 20f * dp);
-
-        if (u.pageT > 0.001f) {
-            float bx = left + 30f * dp;
-            a = u.pageT;
-            chevron(c, bx, cy, -1, 6f * dp, 1.5f * dp, col(p.fg));
-            a = 1f;
-            if (u.pageT >= 0.5f) {
-                hit(H_BACK, left, cy - 28f * dp, bx + 30f * dp, cy + 28f * dp, bx, cy, 22f * dp);
-            }
+        textCentered(c, "Settings", cx0, cy);
+        float bx = left + 30f * dp;
+        chevron(c, bx, cy, -1, 6f * dp, 1.5f * dp, col(p.fg));
+        a = 1f;
+        if (u.pageT >= 0.5f) {
+            hit(H_BACK, left, cy - 28f * dp, bx + 30f * dp, cy + 28f * dp, bx, cy, 22f * dp);
         }
     }
 
     // ---- level page --------------------------------------------------------------------------
 
     private void drawLevelPage(Canvas c, Palette p, boolean active) {
-        float top = u.insetT + 64f * dp;
+        float top = u.insetT + 24f * dp;
         float bottom = u.height - u.insetB - 80f * dp;
         float pillRow = 64f * dp;
         float area = Math.max(1f, bottom - top - pillRow);
@@ -440,15 +433,49 @@ final class Renderer {
     }
 
     // ---- settings page -----------------------------------------------------------------------
+    // A list of rows split by hairlines, each a label, an optional dim second line and its
+    // control. Short choices are segmented (every option visible, the accent slides to the one
+    // chosen), on/off is a switch, and the theme is a row of swatches at the end.
+
+    private float pad() {
+        return 16f * dp;
+    }
+
+    private float labH(boolean sub) {
+        return 16f * sp * 1.3f + (sub ? 2f * dp + 13f * sp * 1.4f : 0f);
+    }
+
+    private float segH() {
+        return Math.max(40f * dp, 14f * sp + 24f * dp);
+    }
+
+    private float segRowH(boolean sub) {
+        return 2f * pad() + labH(sub) + 12f * dp + segH();
+    }
+
+    private float switchRowH() {
+        return 2f * pad() + Math.max(labH(true), 28f * dp);
+    }
+
+    private float calRowH() {
+        return 2f * pad() + (u.resetConfirm ? labH(true) + 12f * dp + 40f * dp : Math.max(labH(true), 40f * dp));
+    }
+
+    private float swatchD(float w, int n) {
+        return n == 0 ? 0f : Math.min(40f * dp, (w - (n - 1) * 8f * dp) / n);
+    }
+
+    private float themeRowH(float w) {
+        return 2f * pad() + labH(true) + 14f * dp + swatchD(w, u.themes.length);
+    }
 
     private void drawSettingsPage(Canvas c, Palette p, boolean active) {
-        float cx = cx0;
-        float viewTop = u.insetT + 56f * dp, viewBottom = u.height - u.insetB;
-        float top = u.insetT + 64f * dp;
-        float rowsTop = top + 60f * dp;
-        float minRow = 18f * sp + 60f * dp;
-        float rh = Math.max(minRow, Math.min(96f * dp, (viewBottom - 16f * dp - rowsTop) / 6f));
-        float contentBottom = rowsTop + 6f * rh + 16f * dp;
+        float viewTop = u.insetT + 64f * dp, viewBottom = u.height - u.insetB;
+        float w = Math.min(usable - 48f * dp, 480f * dp);
+        float x0 = cx0 - w / 2f;
+        float y = viewTop + 8f * dp;
+        float content = segRowH(false) + 2f * segRowH(true) + 2f * switchRowH() + calRowH() + themeRowH(w);
+        float contentBottom = y + content + 24f * dp;
         u.settingsMaxScroll = Math.max(0f, contentBottom - viewBottom);
         float scroll = clamp(u.settingsScroll, 0f, u.settingsMaxScroll);
 
@@ -460,32 +487,21 @@ final class Renderer {
         clipT = viewTop;
         clipB = viewBottom;
 
-        text.setTypeface(light);
-        text.setTextSize(26f * sp);
-        text.setColor(col(p.fg));
-        c.drawText("Settings", cx, top + 26f * sp, text);
-
-        float y = rowsTop;
-        selectorRow(c, p, "Units", u.unitsLabel, y, rh, H_UNITS_PREV, H_UNITS_NEXT, active);
-        y += rh;
-        selectorRow(c, p, "Level tolerance", u.tolLabel, y, rh, H_TOL_PREV, H_TOL_NEXT, active);
-        y += rh;
-        selectorRow(c, p, "Mode", u.modeLabel, y, rh, H_MODE_PREV, H_MODE_NEXT, active);
-        y += rh;
-        toggleRow(c, p, "Haptic feedback", u.hapticsT, y, rh, H_HAPTIC, active);
-        y += rh;
-        toggleRow(c, p, "Keep screen on", u.keepOnT, y, rh, H_KEEPON, active);
-        y += rh;
-        rowLabel(c, p, u.calSummary.length() > 0 ? "Calibration · " + u.calSummary : "Calibration", y);
-        float cy = controlY(y, rh);
-        if (u.calibrated) {
-            pill(c, p, "Reset", cx, cy, H_RESET, active, false, usable - 24f * dp);
-        } else {
-            text.setTypeface(light);
-            text.setTextSize(16f * sp);
-            text.setColor(col(p.dim));
-            textCentered(c, "Factory", cx, cy);
-        }
+        y = segmentedRow(c, p, "Units", null, u.unitOpts, u.unitsPos, H_UNITS, x0, w, y, active);
+        rule(c, p, x0, w, y);
+        y = segmentedRow(c, p, "Level tolerance", "Counts as level within ± this angle",
+                u.tolOpts, u.tolPos, H_TOL, x0, w, y, active);
+        rule(c, p, x0, w, y);
+        y = segmentedRow(c, p, "Mode", "Auto switches between surface and edge",
+                u.modeOpts, u.modePos, H_MODE, x0, w, y, active);
+        rule(c, p, x0, w, y);
+        y = switchRow(c, p, "Haptic feedback", "Buzz on level and on taps", u.hapticsT, H_HAPTIC, x0, w, y, active);
+        rule(c, p, x0, w, y);
+        y = switchRow(c, p, "Keep screen on", "While the level is open", u.keepOnT, H_KEEPON, x0, w, y, active);
+        rule(c, p, x0, w, y);
+        y = calibrationRow(c, p, x0, w, y, active);
+        rule(c, p, x0, w, y);
+        themeRow(c, p, x0, w, y, active);
 
         c.restore();
         hitDy = saveDy;
@@ -504,62 +520,127 @@ final class Renderer {
         }
     }
 
-    private float controlY(float y, float rh) {
-        float lab = 18f * sp;
-        return y + lab + (rh - lab) / 2f;
+    private void rule(Canvas c, Palette p, float x0, float w, float y) {
+        stroke.setStrokeWidth(1f * dp);
+        stroke.setColor(col(p.line));
+        c.drawLine(x0, y, x0 + w, y, stroke);
     }
 
-    private void rowLabel(Canvas c, Palette p, String label, float y) {
+    /** Label and optional second line, left-aligned, top at {@code y}. */
+    private void rowText(Canvas c, Palette p, String label, String sub, boolean subAccent, float x, float y, float maxW) {
+        text.setTextAlign(Paint.Align.LEFT);
         text.setTypeface(regular);
-        text.setTextSize(13f * sp);
-        text.setColor(col(p.fg, 0.9f));
-        fitLine(c, label, cx0, y + 14f * sp, usable - 32f * dp);
-    }
-
-    private void selectorRow(Canvas c, Palette p, String label, String value, float y, float rh,
-                             int prevId, int nextId, boolean active) {
-        rowLabel(c, p, label, y);
-        float cx = cx0, cy = controlY(y, rh);
-        text.setTypeface(light);
-        text.setTextSize(17f * sp);
+        text.setTextSize(16f * sp);
         text.setColor(col(p.fg));
-        float tw = text.measureText(value);
-        textCentered(c, value, cx, cy);
-        float off = Math.min(Math.max(tw, 96f * dp) / 2f + 18f * dp, usable / 2f - 24f * dp);
-        chevron(c, cx - off, cy, -1, 5f * dp, 1.5f * dp, col(p.dim));
-        chevron(c, cx + off, cy, 1, 5f * dp, 1.5f * dp, col(p.dim));
-        if (active) {
-            float hh = Math.min(26f * dp, rh / 2f);
-            hit(prevId, cx - off - 32f * dp, cy - hh, cx - 1f, cy + hh, cx - off, cy, 20f * dp);
-            hit(nextId, cx + 1f, cy - hh, cx + off + 32f * dp, cy + hh, cx + off, cy, 20f * dp);
+        fitLine(c, label, x, y + 16f * sp, maxW);
+        if (sub != null) {
+            text.setTextSize(13f * sp);
+            text.setColor(col(subAccent ? p.accentText : p.dim));
+            fitLine(c, sub, x, y + 16f * sp * 1.3f + 2f * dp + 13f * sp * 1.05f, maxW);
         }
+        text.setTextAlign(Paint.Align.CENTER);
     }
 
-    private void toggleRow(Canvas c, Palette p, String label, float t, float y, float rh, int id, boolean active) {
-        rowLabel(c, p, label, y);
-        float cx = cx0, cy = controlY(y, rh);
-        float r = clamp((rh - 18f * sp) / 2f - 6f * dp, 14f * dp, 22f * dp);
+    private float segmentedRow(Canvas c, Palette p, String label, String sub, String[] opts, float pos,
+                               int base, float x0, float w, float y, boolean active) {
+        float top = y + pad();
+        rowText(c, p, label, sub, false, x0, top, w);
+        float st = top + labH(sub != null) + 12f * dp, h = segH();
+        int n = opts.length;
+        if (n > 0) {
+            float sw = w / n, r = h / 2f, in = 3f * dp;
+            stroke.setStrokeWidth(1f * dp);
+            stroke.setColor(col(p.line));
+            rect.set(x0, st, x0 + w, st + h);
+            c.drawRoundRect(rect, r, r, stroke);
+            float sx = x0 + clamp(pos, 0f, n - 1) * sw;
+            rect.set(sx + in, st + in, sx + sw - in, st + h - in);
+            fill.setColor(col(p.accent));
+            c.drawRoundRect(rect, r - in, r - in, fill);
+            text.setTypeface(regular);
+            text.setTextSize(14f * sp);
+            for (int i = 0; i < n; i++) {
+                float on = clamp(1f - Math.abs(pos - i), 0f, 1f);
+                text.setColor(col(Palette.mix(p.fg, p.onAccentText, on)));
+                fitCentered(c, opts[i], x0 + sw * (i + 0.5f), st + h / 2f, sw - 12f * dp);
+                if (active) hit(base + i, x0 + sw * i, st - 4f * dp, x0 + sw * (i + 1), st + h + 4f * dp, 0, 0, 0f);
+            }
+        }
+        return y + segRowH(sub != null);
+    }
+
+    private float switchRow(Canvas c, Palette p, String label, String sub, float t, int id,
+                            float x0, float w, float y, boolean active) {
+        float tw = 48f * dp, th = 28f * dp;
+        float h = switchRowH() - 2f * pad(), top = y + pad(), cy = top + h / 2f;
+        rowText(c, p, label, sub, false, x0, top + (h - labH(true)) / 2f, w - tw - 16f * dp);
+        float tx1 = x0 + w, tx0 = tx1 - tw, r = th / 2f;
+        rect.set(tx0, cy - r, tx1, cy + r);
         if (t > 0.001f) {
             fill.setColor(col(p.accent, t));
-            c.drawCircle(cx, cy, r, fill);
+            c.drawRoundRect(rect, r, r, fill);
         }
         if (t < 0.999f) {
-            stroke.setStrokeWidth(1f * dp);
+            stroke.setStrokeWidth(1.25f * dp);
             stroke.setColor(col(p.dim, 1f - t));
-            c.drawCircle(cx, cy, r, stroke);
+            c.drawRoundRect(rect, r, r, stroke);
         }
+        fill.setColor(col(Palette.mix(p.dim, p.onAccent, t)));
+        c.drawCircle(tx0 + r + t * (tw - th), cy, r - 5f * dp, fill);
+        float bottom = y + switchRowH();
+        if (active) hit(id, x0, y, tx1, bottom, tx0 + tw / 2f, cy, 30f * dp);
+        return bottom;
+    }
+
+    private float calibrationRow(Canvas c, Palette p, float x0, float w, float y, boolean active) {
+        float top = y + pad(), bottom = y + calRowH();
         text.setTypeface(regular);
-        text.setTextSize(Math.min(11f * sp, r * 0.62f));
-        if (t > 0.001f) {
-            text.setColor(col(p.onAccentText, t));
-            textCentered(c, "ON", cx, cy);
+        text.setTextSize(14f * sp);
+        if (u.resetConfirm) {
+            // The question replaces the summary; the answers sit under it, Erase last and filled.
+            float pw = Math.max(88f * dp, text.measureText("Erase") + 48f * dp);
+            rowText(c, p, "Calibration", "Erase the saved offsets for every pose?", true, x0, top, w);
+            float cy = top + labH(true) + 12f * dp + 20f * dp;
+            pill(c, p, "Erase", x0 + w - pw / 2f, cy, H_RESET_ERASE, active, true, pw);
+            pill(c, p, "Keep", x0 + w - pw - 8f * dp - pw / 2f, cy, H_RESET_KEEP, active, false, pw);
+            return bottom;
         }
-        if (t < 0.999f) {
-            text.setColor(col(p.dim, 1f - t));
-            textCentered(c, "OFF", cx, cy);
+        String sub = u.calNote != null ? u.calNote
+                : u.calSummary.length() > 0 ? Character.toUpperCase(u.calSummary.charAt(0)) + u.calSummary.substring(1)
+                : "Not calibrated";
+        float h = bottom - y - 2f * pad(), cy = top + h / 2f;
+        float pw = u.calibrated ? Math.max(72f * dp, text.measureText("Reset") + 40f * dp) : 0f;
+        rowText(c, p, "Calibration", sub, u.calNote != null, x0, top + (h - labH(true)) / 2f,
+                w - (pw > 0f ? pw + 16f * dp : 0f));
+        if (u.calibrated) pill(c, p, "Reset", x0 + w - pw / 2f, cy, H_RESET, active, false, pw);
+        return bottom;
+    }
+
+    private void themeRow(Canvas c, Palette p, float x0, float w, float y, boolean active) {
+        int n = u.themes.length;
+        float top = y + pad();
+        rowText(c, p, "Theme", n > 0 ? u.themes[u.themeIdx].name : null, false, x0, top, w);
+        float d = swatchD(w, n), r = d / 2f;
+        float gap = n > 1 ? Math.min(16f * dp, (w - n * d) / (n - 1)) : 0f;
+        float cy = top + labH(true) + 14f * dp + r;
+        for (int i = 0; i < n; i++) {
+            Palette t = u.themes[i];
+            float cx = x0 + r + i * (d + gap);
+            fill.setColor(col(t.bg));
+            c.drawCircle(cx, cy, r, fill);
+            stroke.setStrokeWidth(1f * dp);
+            stroke.setColor(col(p.dim, 0.5f));
+            c.drawCircle(cx, cy, r, stroke);
+            fill.setColor(col(t.accent));
+            c.drawCircle(cx, cy, r * 0.42f, fill);
+            if (i == u.themeIdx) {
+                stroke.setStrokeWidth(2f * dp);
+                stroke.setColor(col(p.accent));
+                c.drawCircle(cx, cy, r + 3.5f * dp, stroke);
+            }
+            float hw = (d + gap) / 2f, hh = Math.max(24f * dp, r + 6f * dp);
+            if (active) hit(H_THEME + i, cx - hw, cy - hh, cx + hw, cy + hh, cx, cy, r + 6f * dp);
         }
-        float hr = Math.max(r + 6f * dp, 24f * dp);
-        if (active) hit(id, cx - hr - 12f * dp, cy - hr, cx + hr + 12f * dp, cy + hr, cx, cy, r + 6f * dp);
     }
 
     // ---- primitives --------------------------------------------------------------------------
@@ -653,6 +734,14 @@ final class Renderer {
     private void textCentered(Canvas c, String s, float cx, float cy) {
         text.getFontMetrics(fm);
         c.drawText(s, cx, cy - (fm.ascent + fm.descent) / 2f, text);
+    }
+
+    /** {@link #textCentered}, shrunk to fit {@code maxW}. */
+    private void fitCentered(Canvas c, String s, float cx, float cy, float maxW) {
+        float size = text.getTextSize(), w = text.measureText(s);
+        if (w > maxW && w > 0f) text.setTextSize(size * maxW / w);
+        textCentered(c, s, cx, cy);
+        text.setTextSize(size);
     }
 
     /** Centred text, wrapped onto at most two lines at word boundaries, the second shrunk to fit. */

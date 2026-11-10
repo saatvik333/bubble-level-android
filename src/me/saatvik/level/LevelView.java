@@ -26,7 +26,8 @@ final class LevelView extends View {
     interface Host {
         void onThemeApplied(Palette target);
         void onSettingsChanged();
-        void onCalibrationChanged();
+        /** Persists the calibration; false when it could not be saved. */
+        boolean onCalibrationChanged();
         void setGyroActive(boolean on);
         void setBackIntercept(boolean on);
     }
@@ -68,11 +69,12 @@ final class LevelView extends View {
 
     private int lastCal = LevelEngine.CAL_IDLE;
     private long calEndNs;
+    private boolean calSaved = true;       // whether the last finished calibration reached storage
     private boolean gyroOn;
 
     private int downId;
     private float downX, downY, lastY;
-    private boolean swiping, scrolling, multi;
+    private boolean scrolling, multi;
     private int hitSig;
 
     LevelView(Context ctx, Renderer renderer, LevelEngine engine, Settings settings, Palette[] themes, Host host) {
@@ -92,7 +94,12 @@ final class LevelView extends View {
         for (int i = 0; i < themes.length; i++) if (themes[i].name.equals(settings.theme)) themeIdx = i;
         palFrom = palTo = themes[themeIdx];
         ui.pal = palTo;
-        ui.themeName = palTo.name;
+        ui.themes = themes;
+        ui.themeIdx = themeIdx;
+        ui.unitOpts = Settings.UNITS;
+        ui.modeOpts = Settings.LOCKS;
+        ui.tolOpts = new String[Settings.TOLERANCE.length];
+        for (int i = 0; i < ui.tolOpts.length; i++) ui.tolOpts[i] = String.format(Locale.US, "%.1f°", Settings.TOLERANCE[i]);
 
         ui.guide2 = tanh(2f / SENS_FLAT);
         ui.guide5 = tanh(5f / SENS_FLAT);
@@ -136,7 +143,7 @@ final class LevelView extends View {
 
     boolean handleBack() {
         if (page == 1) {
-            page = 0;
+            closeSettings();
             invalidate();
             return true;
         }
@@ -281,6 +288,10 @@ final class LevelView extends View {
         ui.hapticsT = approach(ui.hapticsT, h, dt, 0.06f);
         ui.keepOnT = approach(ui.keepOnT, k, dt, 0.06f);
         anim |= ui.hapticsT != h || ui.keepOnT != k;
+        ui.unitsPos = approach(ui.unitsPos, ui.units, dt, 0.06f);
+        ui.tolPos = approach(ui.tolPos, ui.tolIdx, dt, 0.06f);
+        ui.modePos = approach(ui.modePos, ui.mode, dt, 0.06f);
+        anim |= ui.unitsPos != ui.units || ui.tolPos != ui.tolIdx || ui.modePos != ui.mode;
         return anim || engine.cal != LevelEngine.CAL_IDLE;
     }
 
@@ -472,9 +483,10 @@ final class LevelView extends View {
             settings.calMask = engine.calMask;
             settings.calibrated = engine.calMask != 0;
             syncSettingsUi(false);
-            host.onCalibrationChanged();
+            calSaved = host.onCalibrationChanged();
+            ui.calNote = calSaved ? null : "Couldn't save. It applies until the app closes";
             calEndNs = now;
-            announce("Calibrated");
+            announce(calSaved ? "Calibrated" : "Calibrated, but couldn't save. It applies until the app closes");
         }
         if ((ev & LevelEngine.EV_FAILED) != 0) {
             buzz(true);
@@ -529,7 +541,9 @@ final class LevelView extends View {
             case LevelEngine.CAL_DONE:
                 ui.caption = "";
                 ui.calTitle = "Calibrated";
-                ui.secondary = edgeCal ? "Edge offset saved" : "Surface offset saved";
+                ui.secondary = !calSaved ? "Couldn't save. It applies until the app closes"
+                        : edgeCal ? "Edge offset saved" : "Surface offset saved";
+                hinted = !calSaved;
                 break;
             case LevelEngine.CAL_FAILED:
                 ui.caption = "";
@@ -587,7 +601,7 @@ final class LevelView extends View {
                 downX = x;
                 downY = y;
                 lastY = y;
-                swiping = scrolling = multi = false;
+                scrolling = multi = false;
                 downId = ui.hitAt(x, y);
                 ui.pressedId = downId;
                 invalidate();
@@ -596,16 +610,13 @@ final class LevelView extends View {
                 multi = true;                  // a second finger cancels the gesture
                 ui.pressedId = 0;
                 downId = 0;
-                swiping = scrolling = false;
+                scrolling = false;
                 invalidate();
                 return true;
             case MotionEvent.ACTION_MOVE: {
                 if (multi) return true;
                 float dx = x - downX, dy = y - downY;
-                if (!swiping && !scrolling && page == 0 && Math.abs(dx) > slop * 2f && Math.abs(dx) > Math.abs(dy) * 1.5f) {
-                    swiping = true;
-                }
-                if (!swiping && !scrolling && page == 1 && ui.settingsMaxScroll > 0f
+                if (!scrolling && page == 1 && ui.settingsMaxScroll > 0f
                         && Math.abs(dy) > slop && Math.abs(dy) > Math.abs(dx)) {
                     scrolling = true;
                 }
@@ -614,7 +625,7 @@ final class LevelView extends View {
                     invalidate();
                 }
                 lastY = y;
-                if (swiping || scrolling || (ui.pressedId != 0 && ui.hitAt(x, y) != downId)) {
+                if (scrolling || (ui.pressedId != 0 && ui.hitAt(x, y) != downId)) {
                     if (ui.pressedId != 0) {
                         ui.pressedId = 0;
                         invalidate();
@@ -623,23 +634,16 @@ final class LevelView extends View {
                 return true;
             }
             case MotionEvent.ACTION_UP: {
-                float dx = x - downX;
                 ui.pressedId = 0;
-                if (!multi) {
-                    if (swiping) {
-                        if (Math.abs(dx) > 64f * ui.dp) setTheme(themeIdx + (dx < 0f ? 1 : -1));
-                    } else if (!scrolling && downId != 0 && ui.hitAt(x, y) == downId) {
-                        action(downId);
-                    }
-                }
-                swiping = scrolling = multi = false;
+                if (!multi && !scrolling && downId != 0 && ui.hitAt(x, y) == downId) action(downId);
+                scrolling = multi = false;
                 downId = 0;
                 invalidate();
                 return true;
             }
             case MotionEvent.ACTION_CANCEL:
                 ui.pressedId = 0;
-                swiping = scrolling = multi = false;
+                scrolling = multi = false;
                 downId = 0;
                 invalidate();
                 return true;
@@ -651,13 +655,11 @@ final class LevelView extends View {
     private void action(int id) {
         boolean changed = false, calChanged = false;
         switch (id) {
-            case Renderer.H_THEME_PREV: setTheme(themeIdx - 1); break;
-            case Renderer.H_THEME_NEXT: setTheme(themeIdx + 1); break;
             case Renderer.H_SETTINGS:
                 page = 1;
                 ui.settingsScroll = 0f;
                 break;
-            case Renderer.H_BACK: page = 0; break;
+            case Renderer.H_BACK: closeSettings(); break;
             case Renderer.H_CALIBRATE:
                 if (engine.cal != LevelEngine.CAL_IDLE) {
                     engine.cancelCal();
@@ -673,12 +675,6 @@ final class LevelView extends View {
                     dirty = true;
                 }
                 break;
-            case Renderer.H_UNITS_PREV: settings.units = wrapIdx(settings.units - 1, Settings.UNITS.length); changed = true; break;
-            case Renderer.H_UNITS_NEXT: settings.units = wrapIdx(settings.units + 1, Settings.UNITS.length); changed = true; break;
-            case Renderer.H_TOL_PREV: settings.tolIdx = wrapIdx(settings.tolIdx - 1, Settings.TOLERANCE.length); changed = true; break;
-            case Renderer.H_TOL_NEXT: settings.tolIdx = wrapIdx(settings.tolIdx + 1, Settings.TOLERANCE.length); changed = true; break;
-            case Renderer.H_MODE_PREV: settings.lock = wrapIdx(settings.lock - 1, Settings.LOCKS.length); changed = true; break;
-            case Renderer.H_MODE_NEXT: settings.lock = wrapIdx(settings.lock + 1, Settings.LOCKS.length); changed = true; break;
             case Renderer.H_HAPTIC: settings.haptics = !settings.haptics; changed = true; break;
             case Renderer.H_KEEPON:
                 settings.keepOn = !settings.keepOn;
@@ -686,6 +682,12 @@ final class LevelView extends View {
                 changed = true;
                 break;
             case Renderer.H_RESET:
+                ui.resetConfirm = true;
+                announce("Erase the saved offsets for every pose?");
+                break;
+            case Renderer.H_RESET_KEEP: ui.resetConfirm = false; break;
+            case Renderer.H_RESET_ERASE:
+                ui.resetConfirm = false;
                 settings.clearCalibration();
                 for (int i = 0; i < 4; i++) engine.surf[i] = engine.edge[i] = 0f;
                 engine.calMask = 0;
@@ -695,7 +697,21 @@ final class LevelView extends View {
                 break;
             case Renderer.H_CAL_CANCEL: engine.cancelCal(); break;
             case Renderer.H_CAL_READY: engine.manualReady(); break;
-            default: return;
+            default:
+                if (id >= Renderer.H_UNITS && id < Renderer.H_UNITS + Settings.UNITS.length) {
+                    settings.units = id - Renderer.H_UNITS;
+                } else if (id >= Renderer.H_TOL && id < Renderer.H_TOL + Settings.TOLERANCE.length) {
+                    settings.tolIdx = id - Renderer.H_TOL;
+                } else if (id >= Renderer.H_MODE && id < Renderer.H_MODE + Settings.LOCKS.length) {
+                    settings.lock = id - Renderer.H_MODE;
+                } else if (id >= Renderer.H_THEME && id < Renderer.H_THEME + themes.length) {
+                    setTheme(id - Renderer.H_THEME);
+                    break;
+                } else {
+                    return;
+                }
+                changed = true;
+                break;
         }
         buzz(false);
         if (changed) {
@@ -703,16 +719,27 @@ final class LevelView extends View {
             syncSettingsUi(false);
             host.onSettingsChanged();
         }
-        if (calChanged) host.onCalibrationChanged();
+        if (calChanged) {
+            boolean saved = host.onCalibrationChanged();
+            ui.calNote = saved ? null : "Erased for now; couldn't save, so it returns on restart";
+            announce(saved ? "Calibration erased" : ui.calNote);
+        }
         invalidate();
     }
 
+    /** Back to the level; an unanswered reset question is dropped, never answered for the user. */
+    private void closeSettings() {
+        page = 0;
+        ui.resetConfirm = false;
+    }
+
     private void setTheme(int idx) {
-        themeIdx = wrapIdx(idx, themes.length);
+        if (idx == themeIdx) return;
+        themeIdx = idx;
         palFrom = ui.pal;
         palTo = themes[themeIdx];
         palT = 0f;
-        ui.themeName = palTo.name;
+        ui.themeIdx = themeIdx;
         settings.theme = palTo.name;
         host.onThemeApplied(palTo);
         host.onSettingsChanged();
@@ -721,16 +748,18 @@ final class LevelView extends View {
     }
 
     private void syncSettingsUi(boolean snap) {
-        ui.unitsLabel = Settings.UNITS[settings.units];
-        float tol = Settings.TOLERANCE[settings.tolIdx];
-        ui.tolLabel = String.format(Locale.US, "± %.1f°", tol);
-        ui.modeLabel = Settings.LOCKS[settings.lock];
+        ui.units = settings.units;
+        ui.tolIdx = settings.tolIdx;
+        ui.mode = settings.lock;
         ui.calibrated = settings.calibrated;
         ui.calSummary = calSummary(settings.calMask);
         ui.guideLabels = settings.units == 0;
         if (snap) {
             ui.hapticsT = settings.haptics ? 1f : 0f;
             ui.keepOnT = settings.keepOn ? 1f : 0f;
+            ui.unitsPos = ui.units;
+            ui.tolPos = ui.tolIdx;
+            ui.modePos = ui.mode;
         }
         dirty = true;
     }
@@ -787,26 +816,57 @@ final class LevelView extends View {
 
     private String label(int id) {
         switch (id) {
-            case Renderer.H_THEME_PREV: return "Previous theme. Current theme " + ui.themeName;
-            case Renderer.H_THEME_NEXT: return "Next theme. Current theme " + ui.themeName;
             case Renderer.H_SETTINGS: return "Settings";
             case Renderer.H_CALIBRATE: return engine.cal != LevelEngine.CAL_IDLE ? "Stop calibration" : "Calibrate";
             case Renderer.H_HOLD: return held ? "Resume live reading" : "Hold reading";
             case Renderer.H_READOUT: return ui.calActive ? ui.calTitle + ". " + ui.secondary : readingText();
             case Renderer.H_BACK: return "Back";
-            case Renderer.H_UNITS_PREV: return "Units " + ui.unitsLabel + ". Previous";
-            case Renderer.H_UNITS_NEXT: return "Units " + ui.unitsLabel + ". Next";
-            case Renderer.H_TOL_PREV: return "Level tolerance " + ui.tolLabel + ". Smaller";
-            case Renderer.H_TOL_NEXT: return "Level tolerance " + ui.tolLabel + ". Larger";
-            case Renderer.H_MODE_PREV: return "Mode " + ui.modeLabel + ". Previous";
-            case Renderer.H_MODE_NEXT: return "Mode " + ui.modeLabel + ". Next";
             case Renderer.H_HAPTIC: return "Haptic feedback";
             case Renderer.H_KEEPON: return "Keep screen on";
             case Renderer.H_RESET: return "Reset calibration. Calibrated: " + ui.calSummary;
+            case Renderer.H_RESET_KEEP: return "Keep calibration";
+            case Renderer.H_RESET_ERASE: return "Erase calibration for every pose";
             case Renderer.H_CAL_CANCEL: return "Cancel calibration";
             case Renderer.H_CAL_READY: return "Ready, it is turned around";
-            default: return "";
+            default:
+                if (id >= Renderer.H_UNITS && id < Renderer.H_UNITS + Settings.UNITS.length) {
+                    return "Units, " + Settings.UNITS[id - Renderer.H_UNITS];
+                }
+                if (id >= Renderer.H_TOL && id < Renderer.H_TOL + Settings.TOLERANCE.length) {
+                    return "Level tolerance, ± " + ui.tolOpts[id - Renderer.H_TOL];
+                }
+                if (id >= Renderer.H_MODE && id < Renderer.H_MODE + Settings.LOCKS.length) {
+                    return "Mode, " + Settings.LOCKS[id - Renderer.H_MODE];
+                }
+                if (id >= Renderer.H_THEME && id < Renderer.H_THEME + themes.length) {
+                    return "Theme " + themes[id - Renderer.H_THEME].name;
+                }
+                return "";
         }
+    }
+
+    /** 1 checked, 0 unchecked, -1 for targets that are not checkable. */
+    private int checked(int id) {
+        if (id == Renderer.H_HAPTIC) return settings.haptics ? 1 : 0;
+        if (id == Renderer.H_KEEPON) return settings.keepOn ? 1 : 0;
+        if (id >= Renderer.H_UNITS && id < Renderer.H_UNITS + Settings.UNITS.length) {
+            return settings.units == id - Renderer.H_UNITS ? 1 : 0;
+        }
+        if (id >= Renderer.H_TOL && id < Renderer.H_TOL + Settings.TOLERANCE.length) {
+            return settings.tolIdx == id - Renderer.H_TOL ? 1 : 0;
+        }
+        if (id >= Renderer.H_MODE && id < Renderer.H_MODE + Settings.LOCKS.length) {
+            return settings.lock == id - Renderer.H_MODE ? 1 : 0;
+        }
+        if (id >= Renderer.H_THEME && id < Renderer.H_THEME + themes.length) {
+            return themeIdx == id - Renderer.H_THEME ? 1 : 0;
+        }
+        return -1;
+    }
+
+    private String roleOf(int id) {
+        if (id == Renderer.H_HAPTIC || id == Renderer.H_KEEPON) return "android.widget.Switch";
+        return checked(id) >= 0 ? "android.widget.RadioButton" : "android.widget.Button";
     }
 
     private final class A11y extends AccessibilityNodeProvider {
@@ -839,12 +899,12 @@ final class LevelView extends View {
             if (h == null) return null;
             AccessibilityNodeInfo info = AccessibilityNodeInfo.obtain(LevelView.this, id);
             info.setPackageName(getContext().getPackageName());
-            boolean toggle = id == Renderer.H_HAPTIC || id == Renderer.H_KEEPON;
-            info.setClassName(toggle ? "android.widget.Switch" : "android.widget.Button");
+            int state = checked(id);
+            info.setClassName(roleOf(id));
             info.setContentDescription(label(id));
-            if (toggle) {
+            if (state >= 0) {
                 info.setCheckable(true);
-                info.setChecked(id == Renderer.H_HAPTIC ? settings.haptics : settings.keepOn);
+                info.setChecked(state == 1);
             }
             info.setParent(LevelView.this);
             r.set(Math.round(h.rect.left), Math.round(h.rect.top), Math.round(h.rect.right), Math.round(h.rect.bottom));
@@ -952,14 +1012,12 @@ final class LevelView extends View {
             if (parent == null) return;
             AccessibilityEvent ev = AccessibilityEvent.obtain(type);
             ev.setPackageName(getContext().getPackageName());
-            boolean toggle = id == Renderer.H_HAPTIC || id == Renderer.H_KEEPON;
-            ev.setClassName(toggle ? "android.widget.Switch" : "android.widget.Button");
+            int state = checked(id);
+            ev.setClassName(roleOf(id));
             ev.setSource(LevelView.this, id);
             ev.setEnabled(true);
             ev.setContentDescription(label(id));
-            if (toggle) {
-                ev.setChecked(id == Renderer.H_HAPTIC ? settings.haptics : settings.keepOn);
-            }
+            if (state >= 0) ev.setChecked(state == 1);
             parent.requestSendAccessibilityEvent(LevelView.this, ev);
         }
     }
@@ -981,9 +1039,5 @@ final class LevelView extends View {
 
     private static float clamp(float v, float lo, float hi) {
         return v < lo ? lo : v > hi ? hi : v;
-    }
-
-    private static int wrapIdx(int i, int n) {
-        return ((i % n) + n) % n;
     }
 }
