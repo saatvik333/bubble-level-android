@@ -20,13 +20,34 @@ public final class Palette {
     /**
      * Derived, WCAG AA: accentText is the accent as text, 4.5:1 on bg and on the TINT wash;
      * onAccentText is text or a glyph on an accent fill, 4.5:1; accentStroke is the accent as a
-     * ring, chevron or focus outline, 3:1 on bg (also at STROKE_ALPHA).
+     * ring, chevron or focus outline, 3:1 on bg (also at STROKE_ALPHA). {@link #contrasted}
+     * raises every bar.
      */
     public final int accentText, onAccentText, accentStroke;
 
     public Palette(String name, boolean dark, int bg, int fg, int dim, int line, int accent, int onAccent) {
         this(name, dark, bg, fg, dim, line, accent, onAccent,
-                accentText(bg, fg, accent), onAccentText(onAccent, accent), accentStroke(bg, fg, accent));
+                accentText(bg, fg, accent, 4.5), onAccentText(onAccent, accent, 4.5), accentStroke(bg, fg, accent, 3.0));
+    }
+
+    /**
+     * This theme for the system's high-contrast setting (Android 14+), same name: fg and dim
+     * reach 7:1 on bg (WCAG AAA text), line 3:1 so outlines read as boundaries, accentText 7:1,
+     * accentStroke 4.5:1, and onAccentText the most legible of onAccent, black and white.
+     */
+    public Palette contrasted() {
+        int pole = contrast(INK, bg) >= contrast(PAPER, bg) ? INK : PAPER;
+        int f = toward(fg, pole, bg, 7.0);
+        // accentText heads for the pole, not fg: fg may only just reach 7:1 on bg, less on the wash
+        return new Palette(name, dark, bg, f, toward(dim, f, bg, 7.0), toward(line, f, bg, 3.0), accent, onAccent,
+                accentText(bg, pole, accent, 7.0), onAccentText(onAccent, accent, 7.0), accentStroke(bg, f, accent, 4.5));
+    }
+
+    /** {@code c} moved toward {@code goal} in 2% steps until it reaches {@code ratio} on bg (or reaches goal). */
+    private static int toward(int c, int goal, int bg, double ratio) {
+        int out = c;
+        for (int i = 1; i <= 50 && contrast(out, bg) < ratio; i++) out = mix(c, goal, i / 50f);
+        return out;
     }
 
     private Palette(String name, boolean dark, int bg, int fg, int dim, int line, int accent, int onAccent,
@@ -45,26 +66,28 @@ public final class Palette {
     }
 
     /** The accent moved toward fg in 2% steps until it reads as text on bg and on the wash. */
-    private static int accentText(int bg, int fg, int accent) {
+    private static int accentText(int bg, int fg, int accent, double ratio) {
         int tint = mix(bg, accent, TINT);
         int at = accent;
-        for (int i = 1; i <= 50 && (contrast(at, bg) < 4.5 || contrast(at, tint) < 4.5); i++) {
+        for (int i = 1; i <= 50 && (contrast(at, bg) < ratio || contrast(at, tint) < ratio); i++) {
             at = mix(accent, fg, i / 50f);
         }
         return at;
     }
 
-    private static int accentStroke(int bg, int fg, int accent) {
+    private static int accentStroke(int bg, int fg, int accent, double ratio) {
         int at = accent;
-        for (int i = 1; i <= 50 && contrast(mix(bg, at, STROKE_ALPHA), bg) < 3.0; i++) {
+        for (int i = 1; i <= 50 && contrast(mix(bg, at, STROKE_ALPHA), bg) < ratio; i++) {
             at = mix(accent, fg, i / 50f);
         }
         return at;
     }
 
-    private static int onAccentText(int onAccent, int accent) {
-        if (contrast(onAccent, accent) >= 4.5) return onAccent;
-        return contrast(INK, accent) >= contrast(PAPER, accent) ? INK : PAPER;
+    /** onAccent when it reaches {@code ratio} on the accent, else black or white, whichever reads better. */
+    private static int onAccentText(int onAccent, int accent, double ratio) {
+        if (contrast(onAccent, accent) >= ratio) return onAccent;
+        int pole = contrast(INK, accent) >= contrast(PAPER, accent) ? INK : PAPER;
+        return contrast(onAccent, accent) >= contrast(pole, accent) ? onAccent : pole;
     }
 
     /** The built-in themes, in the order the theme row shows them. Never modified. */

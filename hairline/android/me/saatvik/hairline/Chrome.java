@@ -1,6 +1,5 @@
 package me.saatvik.hairline;
 
-import android.app.Activity;
 import android.content.res.AssetManager;
 import android.graphics.Insets;
 import android.graphics.Rect;
@@ -13,10 +12,8 @@ import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
-import android.window.OnBackInvokedCallback;
-import android.window.OnBackInvokedDispatcher;
 
-/** The window around a single full-screen custom view: edge to edge, bars in the theme's colours, safe insets, back, fonts. */
+/** The window around a single full-screen custom view: edge to edge, bars in the theme's colours, safe insets, fonts. Back is {@link Stage}'s. */
 public final class Chrome {
     private Chrome() {
     }
@@ -104,41 +101,6 @@ public final class Chrome {
             return Typeface.createFromAsset(assets, "fonts/rubik_" + weight + ".ttf");
         } catch (RuntimeException e) {
             return Typeface.create(weight < 400 ? "sans-serif-light" : "sans-serif", Typeface.NORMAL);
-        }
-    }
-
-    /**
-     * Predictive back. From Android 13 (with android:enableOnBackInvokedCallback="true" in the
-     * manifest, which apps set) Activity.onBackPressed is no longer called; a callback is registered
-     * only while something can close, so at the top level the system keeps its back-to-home
-     * animation. Below 13 the activity forwards onBackPressed to the same {@code back()}.
-     */
-    public static final class Back {
-        private final Activity activity;
-        private final Access.Nodes target;
-        private OnBackInvokedCallback callback;
-        private boolean registered;
-
-        public Back(Activity activity, Access.Nodes target) {
-            this.activity = activity;
-            this.target = target;
-        }
-
-        /** Whether back should reach the app; cheap to call every frame. */
-        public void intercept(boolean on) {
-            if (Build.VERSION.SDK_INT < 33 || on == registered) return;
-            OnBackInvokedDispatcher dispatcher = activity.getOnBackInvokedDispatcher();
-            if (callback == null) {
-                callback = new OnBackInvokedCallback() {
-                    @Override
-                    public void onBackInvoked() {
-                        if (!target.back()) intercept(false);
-                    }
-                };
-            }
-            if (on) dispatcher.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT, callback);
-            else dispatcher.unregisterOnBackInvokedCallback(callback);
-            registered = on;
         }
     }
 }
