@@ -43,6 +43,11 @@ reads better. `TINT` (0.10) is the opacity of an accent wash behind a highlighte
 `STROKE_ALPHA` (0.85) the opacity of a softened accent stroke. `test/…/Check.java` verifies every
 guarantee for the built-ins and for 5000 random palettes.
 
+**High contrast.** When the system's contrast setting is raised (Android 14+), every theme is
+shown as `Palette.contrasted()`: same name, bg and accent; fg and dim at 7:1 on bg, line at 3:1 so
+outlines read as boundaries, accentText at 7:1 on bg and on the wash, accentStroke at 4.5:1, and
+onAccentText the most legible of onAccent, black and white. The check covers every built-in.
+
 The built-in themes, in swatch order:
 
 | Theme | | bg | fg | dim | line | accent | onAccent | accentText | onAccentText | accentStroke |
@@ -68,21 +73,27 @@ instrument shows; Regular (400) for everything else. Sizes in sp:
 | Control text (`CONTROL`) | 14 | pills, segments, stepper value |
 | Caption | 12 | above a value; never under 10 sp on screen when an instrument is scaled |
 
-Text follows the system font scale up to `MAX_FONT_SCALE` (1.3×):
-`sp = min(scaledDensity, density × 1.3)`. Each app is one fixed screen, an instrument with its
-readout and controls, not a scrolling document; beyond 1.3× the instrument, the reading and the
-bottom bar can no longer share a phone screen without hiding one of them. Layouts are checked at
-1.3× on a 320 dp phone. Text that still does not fit shrinks to its width (`fitLine`,
-`fitCentered`) or wraps onto two lines, breaking at a sentence when both halves fit
-(`wrapped`, `wrappedCentered`).
+Text on a fixed page (an instrument, its readout and controls) follows the system font scale up
+to `MAX_FONT_SCALE` (1.3×): beyond it the instrument, the reading and the bottom bar can no
+longer share a phone screen without hiding one of them. Layouts there are checked at 1.3× on a
+320 dp phone; text that still does not fit shrinks to its width (`fitLine`, `fitCentered`) or
+wraps onto two lines, breaking at a sentence when both halves fit (`wrapped`, `wrappedCentered`).
+
+Pages that scroll (the settings list and its header) follow the system font scale fully, up to
+2× and as non-linearly as Android 14+ scales it (`Frame.fullPx`, sampled from
+`TypedValue.applyDimension`; `Kit.fullText` marks such a layer). There nothing shrinks: labels
+and second lines wrap onto as many lines as they need (`Kit.drawLines`), a control that no
+longer fits beside its text goes under it, and a segmented choice whose options would shrink
+below 90 % becomes a stacked list. Checked at 2× on a 320 dp phone.
 
 ## Space and size
 
 All in dp. `PAD` 16 inside a row; 24 margins either side of the settings column
 (`COLUMN` 480 at most); 12 between a label and its control, 14 above swatches. Controls are
-`CONTROL_H` 40 tall (a segmented control grows with large text: `max(40, 14 sp + 24)`); every
-touch target is at least `TOUCH` 48 tall (a pill's target reaches past it vertically) and 40
-wide. The switch is 48 × 28. Swatches are at most 40 across with 8–16 between. The header's
+`CONTROL_H` 40 tall (segmented controls, steppers and list pills grow with large text:
+`max(40, 14 sp + 24)`; a stacked option is `max(48, 14 sp × 1.3 + 16)`); every touch target is
+at least `TOUCH` 48 tall (a pill's target reaches past it vertically) and 40 wide. The switch is
+48 × 28. Swatches are at most 40 across with 8–16 between. The header's
 centre line sits 32 below the top inset; the settings list starts 64 below it, scrolls under the
 header and ends 24 past its last row. The bottom bar's icons sit 40 above the bottom inset, at
 even fractions of the width.
@@ -94,13 +105,16 @@ even fractions of the width.
 - **Settings list** (`SettingsPage`): rows split by hairlines, each a label, an optional dim second
   line, and one control. The row types, in the order they usually appear:
   - *Segmented* — one choice among a few short options, all visible; the accent highlight slides
-    to the chosen one. Use it up to five options that fit a phone's width.
+    to the chosen one. Use it up to five options that fit a phone's width. When large text no
+    longer fits, the options stack one per line, each a full-width target with a radio at its end
+    (`Kit.radio`: a dim ring, an accentStroke ring and dot when chosen).
   - *Switch* — on/off; the whole row is the target.
   - *Stepper* — a value from a long range (A4 415–466 Hz): chevrons at the ends of a hairline
     capsule step it down and up; a held key or finger repeats. It sits beside its text, or under
     it, at the column start, when the label or second line would not fit beside it at full size.
-  - *Actions* — outlined pills at the end of the row (Reset). A destructive action asks in place
-    (see Interaction).
+  - *Actions* — outlined pills at the end of the row (Reset), under the text when they would
+    leave it less than half the column. A destructive action asks in place (see Interaction). A
+    row with no buttons is still a text node a screen reader reaches.
   - *Themes* — swatches, the selected one ringed; always the last row.
 - **Pills** (`Kit.pill`): outlined (`dim` at 70 %, fg text) for every action except the single
   primary or destructive answer of a question, which is filled accent with onAccentText. At least
@@ -120,28 +134,40 @@ even fractions of the width.
 - **Every control is a virtual node.** The UI is one custom view; `Access` exposes each target in
   the hit table to TalkBack, Switch Access and Voice Access with a label, a role (button, switch,
   radio option, text) and a checked state, and makes the list scrollable by services. Labels come
-  from the words on screen: a settings option reads "Units, Percent".
+  from the words on screen: a settings option reads "Units, Percent". The options of one choice
+  sit in a group node named by the row, with collection info, so services say "2 of 4".
 - **Keyboard and D-pad.** Arrows move the focus ring to the nearest target in that direction,
   preferring ones in line; past the last visible row they scroll the list. Tab and Shift+Tab go in
   reading order. Enter, Space or the centre key activates; only stepper chevrons repeat while
   held. Escape goes back. Opening a page puts focus on its first target; closing it returns focus
   to the control that opened it.
 - **Touch.** A tap acts on release, inside the target it started on. A vertical drag scrolls the
-  list; a second finger cancels.
-- **Haptics.** A light tick on every tap (`KEYBOARD_TAP`); a firmer one (`CONFIRM`, `VIRTUAL_KEY`
-  before Android 11) for success: reaching level or pitch, a calibration step. A setting turns them
-  off.
+  list; a second finger cancels. A finger held on a stepper chevron repeats it.
+- **Back.** System back, Escape and the header chevron close what is open. From Android 13 back
+  reaches the app only while something is open, so at the top level the system's back-to-home
+  animation plays; from 14 a back gesture previews closing the page (`Frame.backT`, up to
+  `BACK_PREVIEW` of the transition) and a cancelled gesture puts it back.
+- **Haptics.** Every activation gives one (`Stage` does it before the app acts): a light tick
+  (`KEYBOARD_TAP`), or for a switch `TOGGLE_ON` / `TOGGLE_OFF` on Android 14+; a firmer `CONFIRM`
+  for success (reaching level or pitch, a calibration step) and `REJECT` for a failure or refusal
+  (Android 11+, older equivalents before); a held stepper ticks with `SEGMENT_FREQUENT_TICK`. Read-
+  only text gives none. A setting turns them off; the system's touch-feedback setting still applies.
 - **Changes save at once.** There is no Save button; a setting applies and persists when touched.
 - **Destructive actions confirm in place.** The row's second line becomes the question in
   accentText ("Erase the saved offsets for every pose?") and the answers appear under it: the safe
   one first, outlined, and the destructive one last, filled, each named for what it does (Keep /
-  Erase), never Yes / No or OK / Cancel. The safe answer takes the trigger's id, so keyboard focus
-  stays on it. Leaving the page drops an unanswered question; it is never answered for the user.
+  Erase), never Yes / No or OK / Cancel. The safe answer takes the trigger's id, so keyboard and
+  accessibility focus stay on it and the question is read from its new label. Leaving the page
+  drops an unanswered question; it is never answered for the user.
 - **Errors stay on the row.** When something cannot be saved, the row's second line says so in
-  accentText ("Couldn't save. It applies until the app closes") and it is announced once.
-- **Speech.** `announce` is for moments (a page opened, a step done, a refusal), not for text left
-  on screen. A reading that keeps changing is a polite live region (`Access.live`) said at most
-  every 1.5 s, and the settled value is always said.
+  accentText ("Couldn't save. It applies until the app closes"); the row's node carries it as its
+  error, which services report once.
+- **Nothing is spoken that is not on screen.** Android 16 deprecates announcements, and a deaf or
+  hard-of-hearing user must get every message too. A page names itself (`paneTitle`: "Settings",
+  a tab's name, the app's title for the main page). A control whose words change after it is used
+  ("Hold reading" becomes "Resume live reading") is read again while it holds accessibility focus.
+  A reading or status that changes is a polite live region (`Stage.liveTarget`) said at most every
+  1.5 s, the settled value always said; a moment (a step done, a refusal) appears in that region.
 
 ## Motion
 
@@ -156,6 +182,11 @@ even fractions of the width.
 A time constant τ means the value covers 63 % of the way in τ and settles in about 4τ.
 `Motion.approach` snaps to the target within 0.002, so loops end.
 
+Interface motion follows the system's animation scale (`Frame.motion`, from developer options
+and the accessibility "Remove animations" setting): `Stage.approach` multiplies τ by it, the
+theme fade lasts `THEME` × it, and at 0 every value jumps to its target and the arrival pulse is
+not drawn. Motion that carries information (a bubble, a needle) keeps its own physics.
+
 ## Adaptation
 
 - **Insets.** Bars are transparent and the app draws edge to edge (`Chrome.edgeToEdge`); content
@@ -167,7 +198,7 @@ A time constant τ means the value covers 63 % of the way in τ and settles in a
   keeping 10–11 sp on screen), and secondary parts last, one at a time (Tuner's guide gives up its
   string diagram, sub-line, meter labels, caption, title and finally its button row). Nothing given
   up comes back while the window only shrinks. The settings list scrolls instead of shrinking.
-- **Large text** follows the system up to 1.3× (see Type).
+- **Large text** follows the system up to 1.3× on fixed pages and fully on pages that scroll (see Type).
 - **Landscape and large screens** keep the centred column; the instrument fits the shorter side.
 
 ## Theming
@@ -176,27 +207,30 @@ Themes are the built-ins plus Wallpaper: the system's Material You colours on An
 (`Themes.wallpaper`), read for the current day or night mode when the activity starts. A theme is
 chosen only in Settings, from the swatches in the last row, and saved by name; a name that no
 longer exists (Wallpaper after a downgrade) falls back to the first theme. Changing theme
-cross-fades every token and recolours the bars.
+cross-fades every token and recolours the bars. The system's contrast level and animation scale
+are read whenever the activity resumes, since both change only in system settings.
 
 ## App skeleton
 
-- **MainActivity**: fonts (`Chrome.font(getAssets(), 300 / 400)`), themes (`Themes.all`), the
-  view, `Chrome.edgeToEdge` after `setContentView`, `Chrome.theme` on every theme change and
-  again in `onAttachedToWindow`, `Chrome.Back` driven by the view, `onBackPressed` forwarding to
-  the view's `back()` for Android 12 and below, settings saved in `onPause`. The manifest sets
+- **MainActivity**: fonts (`Chrome.font(getAssets(), 300 / 400)`), the view, `Chrome.edgeToEdge`
+  after `setContentView`, `view.resume()` / `view.pause()`, `onBackPressed` forwarding to the
+  view's `back()` for Android 12 and below, settings saved in `onPause`. The manifest sets
   `android:enableOnBackInvokedCallback="true"`.
-- **View**: owns animation and input; implements `Access.Nodes`. `onDraw`: step the animations,
-  `renderer.draw`, `access.afterFrame()`, and post another frame only while something moves.
-  Forwards insets to `Chrome.insets`, hover to `access.onHover`, focus and keys to `Access`, and
-  clears `hits.focused` on touch down. Calls `access.pageChanged` when it switches pages and sets
-  `access.list` to the settings page while it shows.
-- **Renderer** (android.graphics only): one `Kit`; `k.begin(...)` each frame, the pages as layers
+- **View** extends `Stage<Ui>`, which owns the frame loop (draws only while something moves),
+  insets, touch, keys, accessibility, themes, haptics, back and the system's preference signals.
+  The app supplies `step` (advance; true while moving), `render`, `act`, `canGoBack`, `back`,
+  labels for its own targets, `themeChanged` to save the theme, and `liveTarget` for a changing
+  reading. It calls `access.pageChanged` and `paneTitle` when it switches pages, sets
+  `access.list` to the settings page while it shows, and `requestFrame()` when a sample would
+  change something visible.
+- **Renderer** (android.graphics only): one `Kit`; `k.begin(ui)` each frame, the pages as layers
   (`k.a`, `k.hitDy`), the settings rows declared on a `SettingsPage`, `k.header`, and
   `k.feedback` last.
-- **Ui**: the frame's state, written by the view and read by the renderer, including the `Hits`
-  table and the `SettingsPage`.
+- **Ui** extends `Frame`: the frame's state, written by the view and read by the renderer,
+  including the `Hits` table and the `SettingsPage`.
 - **Preview and tests**: `tools/preview/` renders the real renderer on the JVM with
-  `hairline/preview` stubs, at a phone size, a split screen, a 320 dp phone at 1.3× and landscape,
-  with the focus ring on; plain-Java tests for the engine with the same `check()` style.
+  `hairline/preview` stubs, at a phone size, a split screen, a 320 dp phone at 1.3× and 2×,
+  landscape and high contrast, with the focus ring on; plain-Java tests for the engine with the
+  same `check()` style.
 - **build.sh**: compile `src`, `hairline/src` and `hairline/android` together; link assets from
   `hairline/assets`. See README.md.

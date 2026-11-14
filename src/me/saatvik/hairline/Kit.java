@@ -22,8 +22,13 @@ public final class Kit {
     public static final float PAD = 16f, CONTROL_H = 40f, TOUCH = 48f, COLUMN = 480f, SWITCH_W = 48f, SWITCH_H = 28f;
     /** Focus ring stroke and its gap outside the press shape, dp. */
     public static final float FOCUS_W = 2f, FOCUS_GAP = 3f;
-    /** Text follows the system font scale up to this factor; layouts are checked at it. */
+    /**
+     * Text on a fixed page (an instrument and its controls) follows the system font scale up to
+     * this factor; layouts are checked at it. Scrolling pages ({@link #fullText}) follow it fully.
+     */
     public static final float MAX_FONT_SCALE = 1.3f;
+    /** Most lines {@link #rowText} wraps a label or second line onto; the last takes the rest, shrunk. */
+    static final int MAX_LINES = 6;
 
     public final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
     public final Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -34,10 +39,16 @@ public final class Kit {
     public float dp = 1f, sp = 1f;
     public Palette pal = Palette.BUILT_IN[0];
     public Hits hits;
+    public Frame frame;
     /** Alpha multiplier of the layer being drawn; {@link #col} applies it. */
     public float a = 1f;
     /** Canvas translation of the layer being drawn; added to hit rectangles. */
     public float hitDy;
+    /**
+     * Whether text in the layer being drawn follows the system font scale fully, as on a page that
+     * scrolls; otherwise it stops at {@link #MAX_FONT_SCALE}. {@link #px} applies it.
+     */
+    public boolean fullText;
 
     private float clipT = Float.NEGATIVE_INFINITY, clipB = Float.POSITIVE_INFINITY;
     private final Paint.FontMetrics fm = new Paint.FontMetrics();
@@ -55,6 +66,18 @@ public final class Kit {
     private final Wrap[] wraps = new Wrap[16];
     private int wrapNext;
 
+    /** Where {@link #rowText} breaks a string into lines; kept like {@link Wrap}. */
+    private static final class Para {
+        String src;
+        float maxW, size;
+        Typeface tf;
+        int n;
+        final String[] lines = new String[MAX_LINES];
+    }
+
+    private final Para[] paras = new Para[24];
+    private int paraNext;
+
     public Kit(Typeface light, Typeface regular) {
         this.light = light;
         this.regular = regular;
@@ -65,16 +88,23 @@ public final class Kit {
         text.setTextAlign(Paint.Align.CENTER);
     }
 
-    /** Starts a frame: empties {@code hits}, resets layer alpha, translation and clip. */
-    public void begin(Hits hits, Palette pal, float dp, float sp) {
-        this.hits = hits;
-        this.pal = pal;
-        this.dp = dp;
-        this.sp = sp;
+    /** Starts a frame: palette, scale, an emptied hit table; resets layer alpha, translation, text scale and clip. */
+    public void begin(Frame f) {
+        frame = f;
+        hits = f.hits;
+        pal = f.pal;
+        dp = f.dp;
+        sp = f.sp;
         hits.reset();
         a = 1f;
         hitDy = 0f;
+        fullText = false;
         unclipHits();
+    }
+
+    /** Text size {@code size} sp in px for the layer being drawn (see {@link #fullText}). */
+    public float px(float size) {
+        return fullText ? frame.fullPx(size) : size * sp;
     }
 
     /** Targets outside [top, bottom) (screen px) are cut to it or dropped: the visible part of a scrolled list. */
@@ -151,15 +181,19 @@ public final class Kit {
 
     // ---- components --------------------------------------------------------------------------
 
-    /** Centred title with a back chevron at the left; the back target is registered while {@code active}. */
+    /**
+     * Centred title with a back chevron at the left; the back target is registered while
+     * {@code active}. The title heads a page that scrolls, so it follows the full text scale,
+     * shrunk only to keep clear of the chevron.
+     */
     public void header(Canvas c, String title, float left, float cx, float cy, int backId, boolean active) {
+        float bx = left + 30f * dp;
         if (title != null) {
             text.setTypeface(regular);
-            text.setTextSize(TITLE * sp);
+            text.setTextSize(frame.fullPx(TITLE));
             text.setColor(col(pal.fg));
-            textCentered(c, title, cx, cy);
+            fitCentered(c, title, cx, cy, 2f * (cx - bx - 30f * dp));
         }
-        float bx = left + 30f * dp;
         chevron(c, bx, cy, -1, 6f * dp, 1.5f * dp, col(pal.fg));
         if (active) hitCircle(backId, left, cy - 28f * dp, bx + 30f * dp, cy + 28f * dp, bx, cy, 22f * dp);
     }
@@ -173,7 +207,7 @@ public final class Kit {
                      float maxW, float h) {
         text.setTypeface(regular);
         // full-height pills follow the font scale; compact ones keep their text inside
-        float size = h >= CONTROL_H * dp ? CONTROL * sp : Math.min(CONTROL * sp, h * 0.4f);
+        float size = h >= CONTROL_H * dp ? px(CONTROL) : Math.min(px(CONTROL), h * 0.4f);
         text.setTextSize(size);
         float tw = text.measureText(label);
         float w = Math.min(Math.max(112f * dp, tw + 48f * dp), Math.max(maxW, 72f * dp));
@@ -195,9 +229,9 @@ public final class Kit {
         if (active) hitPill(id, r.left - 4f * dp, r.top - ext, r.right + 4f * dp, r.bottom + ext, cx, cy, w / 2f, h / 2f);
     }
 
-    /** Height of a segmented control: {@link #CONTROL_H}, more when large text needs it. */
-    public float segmentH() {
-        return Math.max(CONTROL_H * dp, CONTROL * sp + 24f * dp);
+    /** Height of a segmented control, stepper or pill in a list: {@link #CONTROL_H}, more when large text needs it. */
+    public float controlH() {
+        return Math.max(CONTROL_H * dp, px(CONTROL) + 24f * dp);
     }
 
     /**
@@ -207,7 +241,7 @@ public final class Kit {
     public void segmented(Canvas c, String[] opts, float pos, int baseId, float x0, float w, float top, boolean active) {
         int n = opts.length;
         if (n == 0) return;
-        float h = segmentH(), sw = w / n, rr = h / 2f, in = 3f * dp;
+        float h = controlH(), sw = w / n, rr = h / 2f, in = 3f * dp;
         stroke.setStrokeWidth(1f * dp);
         stroke.setColor(col(pal.line));
         r.set(x0, top, x0 + w, top + h);
@@ -217,7 +251,7 @@ public final class Kit {
         fill.setColor(col(pal.accent));
         c.drawRoundRect(r, rr - in, rr - in, fill);
         text.setTypeface(regular);
-        text.setTextSize(CONTROL * sp);
+        text.setTextSize(px(CONTROL));
         for (int i = 0; i < n; i++) {
             float on = Motion.clamp(1f - Math.abs(pos - i), 0f, 1f);
             float cx = x0 + sw * (i + 0.5f);
@@ -233,21 +267,21 @@ public final class Kit {
     /** Width of a {@link #stepper} showing {@code value}: steady across similar values, wider for long ones. */
     public float stepperW(String value) {
         text.setTypeface(regular);
-        text.setTextSize(CONTROL * sp);
+        text.setTextSize(px(CONTROL));
         return Math.max(152f * dp, text.measureText(value) + 2f * stepperEnd());
     }
 
     /** Room at each end of a stepper that the value keeps clear of: chevron, press circle, focus ring, 4 dp. */
     private float stepperEnd() {
-        return 22f * dp + segmentH() / 2f - 3f * dp + (FOCUS_GAP + FOCUS_W / 2f + 4f) * dp;
+        return 22f * dp + controlH() / 2f - 3f * dp + (FOCUS_GAP + FOCUS_W / 2f + 4f) * dp;
     }
 
     /**
-     * Stepper: the value in a hairline capsule {@link #segmentH} tall, chevrons at its ends, right
+     * Stepper: the value in a hairline capsule {@link #controlH} tall, chevrons at its ends, right
      * edge at {@code right}. Its left half is target {@code id} (lower), its right half {@code id + 1}.
      */
     public void stepper(Canvas c, String value, float right, float cy, int id, boolean active) {
-        float sw = stepperW(value), h = segmentH(), rr = h / 2f;
+        float sw = stepperW(value), h = controlH(), rr = h / 2f;
         float x0 = right - sw, mid = x0 + sw / 2f, lx = x0 + 22f * dp, rx = right - 22f * dp;
         stroke.setStrokeWidth(1f * dp);
         stroke.setColor(col(pal.line));
@@ -281,6 +315,21 @@ public final class Kit {
         c.drawCircle(x0 + rr + t * (tw - th), cy, rr - 5f * dp, fill);
     }
 
+    /**
+     * One-of-many indicator of a stacked choice, centred on (cx, cy): a ring in dim, turning to an
+     * accentStroke ring around an accentStroke dot as {@code t} goes to 1 (chosen).
+     */
+    public void radio(Canvas c, float t, float cx, float cy) {
+        float rr = 10f * dp;
+        stroke.setStrokeWidth(1.5f * dp);
+        stroke.setColor(col(Palette.mix(pal.dim, pal.accentStroke, t)));
+        c.drawCircle(cx, cy, rr, stroke);
+        if (t > 0.001f) {
+            fill.setColor(col(pal.accentStroke, t));
+            c.drawCircle(cx, cy, rr * 0.5f * (0.6f + 0.4f * t), fill);
+        }
+    }
+
     /** A theme as a swatch: its bg disc, hairline edge, accent centre; a ring when selected. */
     public void swatch(Canvas c, Palette t, float cx, float cy, float radius, boolean selected) {
         fill.setColor(col(t.bg));
@@ -304,22 +353,32 @@ public final class Kit {
         c.drawLine(x0, y, x0 + w, y, stroke);
     }
 
-    /** Height of {@link #rowText}: the label, plus the second line when there is one. */
-    public float rowTextH(boolean sub) {
-        return LABEL * sp * 1.3f + (sub ? 2f * dp + SUB * sp * 1.4f : 0f);
+    /** Height of {@link #rowText} for these strings in {@code maxW}: the label's lines, then the second line's. */
+    public float rowTextH(String label, String sub, float maxW) {
+        text.setTypeface(regular);
+        text.setTextSize(px(LABEL));
+        float h = lineCount(label, maxW) * px(LABEL) * 1.3f;
+        if (sub == null) return h;
+        text.setTextSize(px(SUB));
+        return h + 2f * dp + lineCount(sub, maxW) * px(SUB) * 1.4f;
     }
 
-    /** Row label and optional second line (dim, or accent for a question or an error), left-aligned, top at y. */
+    /**
+     * Row label and optional second line (dim, or accent for a question or an error), left-aligned,
+     * top at y, each wrapped onto as many lines as it needs within {@code maxW}: large text grows
+     * the row rather than shrinking the words.
+     */
     public void rowText(Canvas c, String label, String sub, boolean subAccent, float x, float y, float maxW) {
         text.setTextAlign(Paint.Align.LEFT);
         text.setTypeface(regular);
-        text.setTextSize(LABEL * sp);
+        float ls = px(LABEL), ss = px(SUB);
+        text.setTextSize(ls);
         text.setColor(col(pal.fg));
-        fitLine(c, label, x, y + LABEL * sp, maxW);
+        int n = drawLines(c, label, x, y + ls, maxW, ls * 1.3f);
         if (sub != null) {
-            text.setTextSize(SUB * sp);
+            text.setTextSize(ss);
             text.setColor(col(subAccent ? pal.accentText : pal.dim));
-            fitLine(c, sub, x, y + LABEL * sp * 1.3f + 2f * dp + SUB * sp * 1.05f, maxW);
+            drawLines(c, sub, x, y + n * ls * 1.3f + 2f * dp + ss * 1.05f, maxW, ss * 1.4f);
         }
         text.setTextAlign(Paint.Align.CENTER);
     }
@@ -395,6 +454,59 @@ public final class Kit {
         if (w > maxW && w > 0f) text.setTextSize(size * maxW / w);
         c.drawText(s, x, base, text);
         text.setTextSize(size);
+    }
+
+    /** Lines {@link #drawLines} puts {@code s} on within {@code maxW} at the paint's font and size; 0 for none. */
+    public int lineCount(String s, float maxW) {
+        return s == null || s.length() == 0 ? 0 : para(s, maxW).n;
+    }
+
+    /**
+     * {@code s} broken at spaces onto as many lines as it needs (at most {@link #MAX_LINES}), the
+     * first on baseline {@code base}, each next {@code lineH} below; a word wider than the line
+     * gets a line of its own, shrunk to fit. Returns the number of lines.
+     */
+    public int drawLines(Canvas c, String s, float x, float base, float maxW, float lineH) {
+        if (s == null || s.length() == 0) return 0;
+        Para p = para(s, maxW);
+        for (int i = 0; i < p.n; i++) fitLine(c, p.lines[i], x, base + i * lineH, maxW);
+        return p.n;
+    }
+
+    private Para para(String s, float maxW) {
+        Typeface tf = text.getTypeface();
+        float size = text.getTextSize();
+        for (Para p : paras) {
+            if (p != null && p.maxW == maxW && p.size == size && p.tf == tf && (p.src == s || p.src.equals(s))) return p;
+        }
+        Para p = paras[paraNext];
+        if (p == null) p = paras[paraNext] = new Para();
+        paraNext = (paraNext + 1) % paras.length;
+        p.src = s;
+        p.maxW = maxW;
+        p.size = size;
+        p.tf = tf;
+        p.n = 0;
+        int start = 0, len = s.length();
+        while (start < len) {
+            if (p.n == MAX_LINES - 1 || text.measureText(s, start, len) <= maxW) {
+                p.lines[p.n++] = s.substring(start);
+                break;
+            }
+            int cut = -1;
+            for (int i = s.indexOf(' ', start + 1); i > 0; i = s.indexOf(' ', i + 1)) {
+                if (text.measureText(s, start, i) <= maxW) cut = i;
+                else break;
+            }
+            if (cut < 0) cut = s.indexOf(' ', start + 1);        // a word wider than the line: alone, shrunk
+            if (cut < 0) {
+                p.lines[p.n++] = s.substring(start);
+                break;
+            }
+            p.lines[p.n++] = s.substring(start, cut);
+            start = cut + 1;
+        }
+        return p;
     }
 
     /** Lines {@link #wrapped} draws {@code s} on: 2 when it breaks, else 1 (text with no break that fits is shrunk onto one). */
