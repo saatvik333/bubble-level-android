@@ -40,12 +40,15 @@ recaptures the screenshots from an emulator, `tools/make_feature_graphic.py` red
     src/me/saatvik/level/
       LevelEngine.java   sensor math, adaptive filter, mode hysteresis, two-step reversal calibration (no Android deps)
       Renderer.java      the instrument and readout, and the settings rows; android.graphics only
-      LevelView.java     animation (spring bubble, theme/page/mode crossfades, sliding option highlight), input, haptics
+      LevelView.java     the level on hairline's Stage: spring bubble, mode and page transitions, calibration
+                         flow, actions, what each control says to accessibility services
       Settings.java      preferences; calibration in a no-backup file
-      Ui.java            per-frame state LevelView writes and Renderer reads
-      MainActivity.java  sensors, window, predictive back
-    hairline/            the design system: palette and themes, drawing primitives, the settings page,
-                         accessibility and keyboard navigation, window chrome, fonts, preview stubs (hairline/README.md)
+      Ui.java            per-frame state (extends hairline's Frame) LevelView writes and Renderer reads
+      MainActivity.java  sensors, window, lifecycle
+    hairline/            the design system: palette and themes, drawing primitives, the settings page, the
+                         Stage view (frame loop, input, accessibility, keyboard, back, haptics, the system's
+                         text scale, contrast and animation settings), window chrome, fonts, preview stubs
+                         (hairline/README.md)
     tools/preview/       renders Renderer on the JVM with hairline's AWT-backed stubs; EngineTest
 
     javac -d /tmp/pv $(find tools/preview hairline/preview hairline/src -name '*.java') src/me/saatvik/level/{Ui,Renderer,LevelEngine}.java
@@ -68,7 +71,12 @@ recaptures the screenshots from an emulator, `tools/make_feature_graphic.py` red
   last. Reset asks first (Keep / Erase) and says so if the change could not be saved.
 - Every control is exposed to TalkBack and Switch Access as a virtual node, and reachable with a
   keyboard or D-pad: arrows move a focus ring, Tab goes in reading order, Enter or Space activates,
-  Escape goes back.
+  Escape goes back. Choices are groups ("2 of 4"), the reading is a polite live region, and nothing
+  is spoken that is not also on screen.
+- Follows the system's settings: the Settings page grows with the font size up to 2× (labels wrap,
+  choices stack into a list), the level page up to 1.3×; high contrast (Android 14+) strengthens
+  text and outlines; "Remove animations" turns transitions off. From Android 14 a back gesture
+  previews closing Settings.
 
 ## Credits
 

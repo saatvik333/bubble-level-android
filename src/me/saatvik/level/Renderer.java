@@ -53,7 +53,7 @@ final class Renderer {
         usable = Math.max(1f, ui.width - ui.insetL - ui.insetR);
         cx0 = left + usable / 2f;
         Palette p = ui.pal;
-        k.begin(ui.hits, p, dp, sp);
+        k.begin(ui);
         c.drawColor(p.bg);
 
         float pt = ui.pageT;

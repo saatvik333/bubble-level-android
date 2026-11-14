@@ -13,8 +13,6 @@ import android.view.Display;
 import java.io.File;
 
 import me.saatvik.hairline.Chrome;
-import me.saatvik.hairline.Palette;
-import me.saatvik.hairline.Themes;
 
 public final class MainActivity extends Activity implements SensorEventListener, LevelView.Host {
 
@@ -26,7 +24,6 @@ public final class MainActivity extends Activity implements SensorEventListener,
     private final LevelEngine engine = new LevelEngine();
     private LevelView view;
     private Display display;
-    private Chrome.Back back;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -49,17 +46,9 @@ public final class MainActivity extends Activity implements SensorEventListener,
         }
 
         view = new LevelView(this, new Renderer(Chrome.font(getAssets(), 300), Chrome.font(getAssets(), 400)),
-                engine, settings, Themes.all(this), this);
-        back = new Chrome.Back(this, view);
+                engine, settings, this);
         setContentView(view);
         Chrome.edgeToEdge(getWindow());
-        onThemeApplied(view.currentTarget());
-    }
-
-    @Override
-    public void onAttachedToWindow() {
-        super.onAttachedToWindow();
-        onThemeApplied(view.currentTarget());   // Android 11 can drop bar appearance set before attach
     }
 
     @Override
@@ -78,16 +67,10 @@ public final class MainActivity extends Activity implements SensorEventListener,
         settings.save(prefs);
     }
 
-    /** Before Android 13: legacy back dispatch. */
+    /** Before Android 13: legacy back dispatch. From 13 the view registers for back while it has something to close. */
     @Override
     public void onBackPressed() {
         if (!view.back()) super.onBackPressed();
-    }
-
-    /** Android 13+: back reaches the view only while it has something to close (settings page, calibration). */
-    @Override
-    public void setBackIntercept(boolean on) {
-        back.intercept(on);
     }
 
     @Override
@@ -144,10 +127,5 @@ public final class MainActivity extends Activity implements SensorEventListener,
     /** Excluded from cloud backup and device-to-device transfer: an offset is specific to one sensor. */
     private File calibrationFile() {
         return new File(getNoBackupFilesDir(), "calibration");
-    }
-
-    @Override
-    public void onThemeApplied(Palette p) {
-        Chrome.theme(getWindow(), p);
     }
 }

@@ -130,6 +130,38 @@ public final class Preview {
         u.main = "2.7°"; u.secondary = "X  +2.2°     Y  +1.4°";
         u.hits.focused = Renderer.H_HOLD;
         shot(r, u, out + "/k3_focus_hold.png");
+
+        // the system font at 2x: the settings list follows it fully, the level page stays capped
+        u = sized("Rosa", 320, 569, 2f, 2f, 24, 48);
+        settings(u);
+        shot(r, u, out + "/x1_2x_settings.png");
+        u = sized("Rosa", 320, 569, 2f, 2f, 24, 48);
+        settings(u); u.page.scroll = 1e9f;
+        shot(r, u, out + "/x2_2x_settings_end.png");
+        u = sized("Aurum", 320, 569, 2f, 2f, 24, 48);
+        u.bubX = 0.2f; u.bubY = -0.1f; u.main = "1.8°"; u.secondary = "X  +1.6°     Y  +0.9°"; u.caption = "Surface";
+        shot(r, u, out + "/x3_2x_level.png");
+        u = sized("Salvia", 412, 914, 2.625f, 2f, 32, 24);
+        settings(u); u.calibrated = false; u.calNote = "Erased for now; couldn't save, so it returns on restart";
+        u.page.scroll = 1e9f;
+        shot(r, u, out + "/x4_2x_settings_error.png");
+
+        // the system's high-contrast setting
+        u = phone("Celeste");
+        contrasted(u);
+        settings(u);
+        shot(r, u, out + "/c1_contrast_settings.png");
+        u = phone("Aurum");
+        contrasted(u);
+        u.bubX = 0.30f; u.bubY = -0.18f; u.main = "2.7°"; u.secondary = "X  +2.2°     Y  +1.4°"; u.caption = "Surface";
+        shot(r, u, out + "/c2_contrast_level.png");
+    }
+
+    static void contrasted(Ui u) {
+        Palette[] t = new Palette[u.themes.length];
+        for (int i = 0; i < t.length; i++) t[i] = u.themes[i].contrasted();
+        u.themes = t;
+        u.pal = t[u.themeIdx];
     }
 
     static void settings(Ui u) {
@@ -157,8 +189,7 @@ public final class Preview {
 
     static Ui sized(String theme, int wDp, int hDp, float density, float font, int topDp, int bottomDp) {
         Ui u = new Ui();
-        u.dp = density;
-        u.sp = density * font;
+        u.textScale(density, font);
         u.width = Math.round(wDp * density);
         u.height = Math.round(hDp * density);
         u.insetT = Math.round(topDp * density);

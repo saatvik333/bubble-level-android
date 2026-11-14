@@ -1,0 +1,1 @@
+Settings follows your font size up to 2x: labels wrap and choices become a list instead of shrinking. High contrast (Android 14+) and "Remove animations" are honoured. A back gesture previews closing Settings. TalkBack reads choices as "2 of 4", reads the level as it changes, and reads the calibration status row.

@@ -2,37 +2,24 @@ package me.saatvik.level;
 
 import android.content.Context;
 import android.graphics.Canvas;
-import android.graphics.Rect;
-import android.os.Build;
-import android.view.HapticFeedbackConstants;
-import android.view.KeyEvent;
-import android.view.MotionEvent;
-import android.view.View;
-import android.view.ViewConfiguration;
-import android.view.WindowInsets;
-import android.view.accessibility.AccessibilityNodeInfo;
-import android.view.accessibility.AccessibilityNodeProvider;
 
 import java.util.Locale;
 
-import me.saatvik.hairline.Access;
-import me.saatvik.hairline.Chrome;
-import me.saatvik.hairline.Hits;
-import me.saatvik.hairline.Kit;
 import me.saatvik.hairline.Motion;
 import me.saatvik.hairline.Palette;
-import me.saatvik.hairline.Themes;
+import me.saatvik.hairline.Stage;
 
-/** Owns animation state and input; delegates all drawing to {@link Renderer}, accessibility and keys to {@link Access}. */
-final class LevelView extends View implements Access.Nodes {
+/**
+ * The level's state, animation and actions on a hairline {@link Stage} (which owns the frame loop,
+ * input, accessibility, themes and back); drawing is {@link Renderer}'s.
+ */
+final class LevelView extends Stage<Ui> {
 
     interface Host {
-        void onThemeApplied(Palette target);
         void onSettingsChanged();
         /** Persists the calibration; false when it could not be saved. */
         boolean onCalibrationChanged();
         void setGyroActive(boolean on);
-        void setBackIntercept(boolean on);
     }
 
     private static final float SENS_FLAT = 8f;   // degrees of tilt mapped to ~76% of travel (tanh)
@@ -40,21 +27,10 @@ final class LevelView extends View implements Access.Nodes {
     private static final float SPRING_W = 15f;   // rad/s
     private static final float SPRING_Z = 0.72f; // slight overshoot, settles in ~0.4 s
 
-    private final Ui ui = new Ui();
     private final Renderer renderer;
     private final LevelEngine engine;
     private final Settings settings;
-    private final Palette[] themes;
     private final Host host;
-    private final float slop;
-    private final Access access = new Access(this, ui.hits, this);
-    private final Rect insets = new Rect();
-
-    private int themeIdx;
-    private Palette palFrom, palTo;
-    private float palT = 1f;
-    private long lastNs, lastDrawNs;
-    private boolean running, loop;
 
     private int page;
     private boolean held;
@@ -68,34 +44,18 @@ final class LevelView extends View implements Access.Nodes {
     private boolean shownEdge, shownLevel, dirty = true;
     private String flash;
     private long flashUntil;
-    private String description = "";
 
     private int lastCal = LevelEngine.CAL_IDLE;
     private long calEndNs;
     private boolean calSaved = true;       // whether the last finished calibration reached storage
     private boolean gyroOn;
 
-    private int downId;
-    private float downX, downY, lastY;
-    private boolean scrolling, multi;
-
-    LevelView(Context ctx, Renderer renderer, LevelEngine engine, Settings settings, Palette[] themes, Host host) {
-        super(ctx);
+    LevelView(Context ctx, Renderer renderer, LevelEngine engine, Settings settings, Host host) {
+        super(ctx, new Ui(), settings.theme);
         this.renderer = renderer;
         this.engine = engine;
         this.settings = settings;
-        this.themes = themes;
         this.host = host;
-        float density = getResources().getDisplayMetrics().density;
-        ui.dp = density;
-        ui.sp = Math.min(getResources().getDisplayMetrics().scaledDensity, density * Kit.MAX_FONT_SCALE);
-        slop = ViewConfiguration.get(ctx).getScaledTouchSlop();
-
-        themeIdx = Themes.indexOf(themes, settings.theme);
-        palFrom = palTo = themes[themeIdx];
-        ui.pal = palTo;
-        ui.themes = themes;
-        ui.themeIdx = themeIdx;
         ui.unitOpts = Settings.UNITS;
         ui.modeOpts = Settings.LOCKS;
         ui.tolOpts = new String[Settings.TOLERANCE.length];
@@ -108,37 +68,18 @@ final class LevelView extends View implements Access.Nodes {
         ui.edgeTicks[2] = tanh(5f / SENS_EDGE);
         syncSettingsUi(true);
         setKeepScreenOn(settings.keepOn);
-        setHapticFeedbackEnabled(true);
-        setFocusable(true);
-        setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_YES);
     }
 
-    Palette currentTarget() {
-        return palTo;
-    }
-
-    void resume() {
-        running = true;
-        lastNs = 0;
-        loop = true;
-        postInvalidateOnAnimation();
-    }
-
-    void pause() {
-        running = false;
+    @Override
+    public void pause() {
+        super.pause();
         if (engine.cal != LevelEngine.CAL_IDLE) engine.cancelCal();
         updateGyro(false);
     }
 
     /** New sensor sample: draw only when something visible would change. */
     void onSensor() {
-        if (!running) return;
-        // A frame is already on its way unless the last one is long gone (e.g. a skipped draw).
-        if (loop && System.nanoTime() - lastDrawNs < 250_000_000L) return;
-        if (loop || needsFrame()) {
-            loop = true;
-            postInvalidateOnAnimation();
-        }
+        if (running() && (looping() || needsFrame())) requestFrame();
     }
 
     /** Closes the settings page or stops calibration; false at the top level. Escape and system back. */
@@ -157,66 +98,38 @@ final class LevelView extends View implements Access.Nodes {
         return false;
     }
 
-    // ---- layout ------------------------------------------------------------------------------
-
     @Override
-    public WindowInsets onApplyWindowInsets(WindowInsets in) {
-        Chrome.insets(in, insets);
-        ui.insetL = insets.left;
-        ui.insetT = insets.top;
-        ui.insetR = insets.right;
-        ui.insetB = insets.bottom;
-        invalidate();
-        return in;
-    }
-
-    @Override
-    protected void onAttachedToWindow() {
-        super.onAttachedToWindow();
-        requestApplyInsets();
-    }
-
-    @Override
-    protected void onSizeChanged(int w, int h, int ow, int oh) {
-        ui.width = w;
-        ui.height = h;
-        invalidate();
+    protected boolean canGoBack() {
+        return page == 1 || engine.cal != LevelEngine.CAL_IDLE;
     }
 
     // ---- frame -------------------------------------------------------------------------------
 
     @Override
-    protected void onDraw(Canvas c) {
-        long now = System.nanoTime();
-        float dt = lastNs == 0 ? 1f / 60f : Math.min(0.05f, (now - lastNs) * 1e-9f);
-        lastNs = now;
-        lastDrawNs = now;
-        boolean animating = step(dt, now);
+    protected void render(Canvas c) {
         renderer.draw(c, ui);
-        access.afterFrame();
-        loop = running && animating;
-        if (loop) postInvalidateOnAnimation();
-        else lastNs = 0;                   // next frame after an idle gap starts with a nominal dt
     }
 
-    private boolean step(float dt, long now) {
+    /** The level page's readout is a polite live region: the reading, or the calibration step. */
+    @Override
+    protected int liveTarget() {
+        return page == 0 ? Renderer.H_READOUT : 0;
+    }
+
+    @Override
+    protected boolean step(float dt, long now) {
         boolean anim = false;
 
-        if (palT < 1f) {
-            palT = Math.min(1f, palT + dt / Motion.THEME);
-            ui.pal = Palette.lerp(palFrom, palTo, Motion.ease(palT));
-            anim = true;
-        }
-
-        ui.pageT = Motion.approach(ui.pageT, page, dt, Motion.PAGE);
-        anim |= ui.pageT != page;
+        // settings over the level; a back gesture previews closing it
+        float pt = page == 1 ? 1f - BACK_PREVIEW * ui.backT : 0f;
+        ui.pageT = approach(ui.pageT, pt, dt, Motion.PAGE);
+        anim |= ui.pageT != pt;
         access.list = page == 1 ? ui.page : null;
 
         handleCalibration(now);
-        host.setBackIntercept(page == 1 || engine.cal != LevelEngine.CAL_IDLE);   // host no-ops if unchanged
 
         boolean edge = engine.mode == LevelEngine.MODE_EDGE;
-        ui.modeT = Motion.approach(ui.modeT, edge ? 1f : 0f, dt, 0.08f);
+        ui.modeT = approach(ui.modeT, edge ? 1f : 0f, dt, 0.08f);
         anim |= ui.modeT != (edge ? 1f : 0f);
         if (edge) {
             float d = LevelEngine.wrap(engine.quarter - rot);
@@ -249,13 +162,13 @@ final class LevelView extends View implements Access.Nodes {
         } else if (!held) {
             boolean next = nextLevel(val);
             if (next && !level) {
-                ui.pulseT = 0f;
-                buzz(true);
+                if (ui.motion > 0f) ui.pulseT = 0f;     // the arrival ring is decoration: none without animations
+                haptic(CONFIRM);
             }
             level = next;
         }
         float lt = level ? 1f : 0f;
-        ui.levelT = Motion.approach(ui.levelT, lt, dt, 0.07f);
+        ui.levelT = approach(ui.levelT, lt, dt, 0.07f);
         anim |= ui.levelT != lt;
         if (ui.pulseT >= 0f) {
             ui.pulseT += dt / 0.7f;
@@ -267,12 +180,12 @@ final class LevelView extends View implements Access.Nodes {
         if (flash != null) anim = true;
 
         float h = settings.haptics ? 1f : 0f, k = settings.keepOn ? 1f : 0f;
-        ui.hapticsT = Motion.approach(ui.hapticsT, h, dt, Motion.CONTROL);
-        ui.keepOnT = Motion.approach(ui.keepOnT, k, dt, Motion.CONTROL);
+        ui.hapticsT = approach(ui.hapticsT, h, dt, Motion.CONTROL);
+        ui.keepOnT = approach(ui.keepOnT, k, dt, Motion.CONTROL);
         anim |= ui.hapticsT != h || ui.keepOnT != k;
-        ui.unitsPos = Motion.approach(ui.unitsPos, ui.units, dt, Motion.CONTROL);
-        ui.tolPos = Motion.approach(ui.tolPos, ui.tolIdx, dt, Motion.CONTROL);
-        ui.modePos = Motion.approach(ui.modePos, ui.mode, dt, Motion.CONTROL);
+        ui.unitsPos = approach(ui.unitsPos, ui.units, dt, Motion.CONTROL);
+        ui.tolPos = approach(ui.tolPos, ui.tolIdx, dt, Motion.CONTROL);
+        ui.modePos = approach(ui.modePos, ui.mode, dt, Motion.CONTROL);
         anim |= ui.unitsPos != ui.units || ui.tolPos != ui.tolIdx || ui.modePos != ui.mode;
         return anim || engine.cal != LevelEngine.CAL_IDLE;
     }
@@ -376,10 +289,7 @@ final class LevelView extends View implements Access.Nodes {
         ui.mainUnit = v[1];
         ui.held = held;
         ui.guideLabels = settings.units == 0;
-        if (ui.calActive) {                     // calibration owns caption and secondary line
-            describe(ui.calTitle + ". " + ui.secondary);
-            return;
-        }
+        if (ui.calActive) return;               // calibration owns caption and secondary line
         ui.caption = held ? "Held" : shownEdge ? "Edge" : "Surface";
         if (flashing) {
             ui.secondary = flash;
@@ -392,7 +302,6 @@ final class LevelView extends View implements Access.Nodes {
             ui.secondary = "X  " + sx[0] + sx[1] + "     Y  " + sy[0] + sy[1];
             ui.secondaryAccent = false;
         }
-        describe(readingText());
     }
 
     private String readingText() {
@@ -401,13 +310,6 @@ final class LevelView extends View implements Access.Nodes {
         if (shownEdge) s += ", " + ui.secondary;
         else if (shownLevel) s += ", level";
         return held ? s + ", held" : s;
-    }
-
-    private void describe(String s) {
-        if (!s.equals(description)) {
-            description = s;
-            setContentDescription(s);
-        }
     }
 
     /** Returns {number, unit-suffix}. */
@@ -454,12 +356,10 @@ final class LevelView extends View implements Access.Nodes {
 
     private void handleCalibration(long now) {
         int ev = engine.takeEvents();
-        if ((ev & LevelEngine.EV_CAPTURE) != 0) {
-            buzz(true);
-            announce("First reading taken. Turn it around.");
-        }
+        // each moment shows in the readout, a live region: it is said from there
+        if ((ev & LevelEngine.EV_CAPTURE) != 0) haptic(CONFIRM);
         if ((ev & LevelEngine.EV_DONE) != 0) {
-            buzz(true);
+            haptic(CONFIRM);
             System.arraycopy(engine.surf, 0, settings.surf, 0, 4);
             System.arraycopy(engine.edge, 0, settings.edge, 0, 4);
             settings.calMask = engine.calMask;
@@ -468,12 +368,10 @@ final class LevelView extends View implements Access.Nodes {
             calSaved = host.onCalibrationChanged();
             ui.calNote = calSaved ? null : "Couldn't save. It applies until the app closes";
             calEndNs = now;
-            announce(calSaved ? "Calibrated" : "Calibrated, but couldn't save. It applies until the app closes");
         }
         if ((ev & LevelEngine.EV_FAILED) != 0) {
-            buzz(true);
+            haptic(REJECT);
             calEndNs = now;
-            announce("Calibration failed. " + failText());
         }
         int cal = engine.cal;
         if ((cal == LevelEngine.CAL_DONE || cal == LevelEngine.CAL_FAILED) && now - calEndNs > 2_200_000_000L) {
@@ -536,10 +434,7 @@ final class LevelView extends View implements Access.Nodes {
             default:
                 break;
         }
-        if (ui.calActive) {
-            ui.secondaryAccent = hinted;
-            describe(ui.calTitle + ". " + ui.secondary);
-        }
+        if (ui.calActive) ui.secondaryAccent = hinted;
         if (cal != lastCal) {
             if (cal == LevelEngine.CAL_IDLE) {
                 ui.secondaryAccent = false;
@@ -569,75 +464,17 @@ final class LevelView extends View implements Access.Nodes {
         dirty = true;
     }
 
-    private void announce(String s) {
-        access.announce(s);
-    }
-
-    // ---- input -------------------------------------------------------------------------------
+    // ---- actions -----------------------------------------------------------------------------
 
     @Override
-    public boolean onTouchEvent(MotionEvent e) {
-        float x = e.getX(), y = e.getY();
-        switch (e.getActionMasked()) {
-            case MotionEvent.ACTION_DOWN:
-                downX = x;
-                downY = y;
-                lastY = y;
-                scrolling = multi = false;
-                ui.hits.focused = 0;           // touch hides the keyboard focus ring
-                downId = ui.hits.at(x, y);
-                ui.hits.pressed = downId;
-                invalidate();
-                return true;
-            case MotionEvent.ACTION_POINTER_DOWN:
-                multi = true;                  // a second finger cancels the gesture
-                ui.hits.pressed = 0;
-                downId = 0;
-                scrolling = false;
-                invalidate();
-                return true;
-            case MotionEvent.ACTION_MOVE: {
-                if (multi) return true;
-                float dx = x - downX, dy = y - downY;
-                if (!scrolling && page == 1 && ui.page.maxScroll > 0f
-                        && Math.abs(dy) > slop && Math.abs(dy) > Math.abs(dx)) {
-                    scrolling = true;
-                }
-                if (scrolling && ui.page.scrollBy(lastY - y)) invalidate();
-                lastY = y;
-                if (ui.hits.pressed != 0 && (scrolling || ui.hits.at(x, y) != downId)) {
-                    ui.hits.pressed = 0;
-                    invalidate();
-                }
-                return true;
-            }
-            case MotionEvent.ACTION_UP: {
-                ui.hits.pressed = 0;
-                if (!multi && !scrolling && downId != 0 && ui.hits.at(x, y) == downId) activate(downId);
-                scrolling = multi = false;
-                downId = 0;
-                invalidate();
-                return true;
-            }
-            case MotionEvent.ACTION_CANCEL:
-                ui.hits.pressed = 0;
-                scrolling = multi = false;
-                downId = 0;
-                invalidate();
-                return true;
-            default:
-                return true;
-        }
-    }
-
-    @Override
-    public void activate(int id) {
+    protected void act(int id) {
         boolean changed = false, calChanged = false;
         switch (id) {
             case Renderer.H_SETTINGS:
                 page = 1;
                 ui.page.scroll = 0f;
                 access.pageChanged(0);
+                paneTitle("Settings");
                 break;
             case Renderer.H_BACK: closeSettings(); break;
             case Renderer.H_CALIBRATE:
@@ -662,9 +499,9 @@ final class LevelView extends View implements Access.Nodes {
                 changed = true;
                 break;
             case Renderer.H_RESET:
-                // Reset asks; while it asks, the same id is Keep, which drops the question
+                // Reset asks; while it asks, the same id is Keep, which drops the question. Focus
+                // stays on that id, so a screen reader reads the question from Keep's new label.
                 ui.resetConfirm = !ui.resetConfirm;
-                if (ui.resetConfirm) announce("Erase the saved offsets for every pose?");
                 break;
             case Renderer.H_ERASE:
                 ui.resetConfirm = false;
@@ -684,7 +521,7 @@ final class LevelView extends View implements Access.Nodes {
                     settings.tolIdx = id - Renderer.H_TOL;
                 } else if (id >= Renderer.H_MODE && id < Renderer.H_MODE + Settings.LOCKS.length) {
                     settings.lock = id - Renderer.H_MODE;
-                } else if (id >= Renderer.H_THEME && id < Renderer.H_THEME + themes.length) {
+                } else if (id >= Renderer.H_THEME && id < Renderer.H_THEME + ui.themes.length) {
                     setTheme(id - Renderer.H_THEME);
                     break;
                 } else {
@@ -693,18 +530,16 @@ final class LevelView extends View implements Access.Nodes {
                 changed = true;
                 break;
         }
-        buzz(false);
         if (changed) {
             engine.lock = settings.lock;
             syncSettingsUi(false);
             host.onSettingsChanged();
         }
         if (calChanged) {
+            // the row now reads "Not calibrated", or shows the error, from the same id
             boolean saved = host.onCalibrationChanged();
             ui.calNote = saved ? null : "Erased for now; couldn't save, so it returns on restart";
-            announce(saved ? "Calibration erased" : ui.calNote);
         }
-        invalidate();
     }
 
     /** Back to the level, keyboard focus to the settings button; an unanswered reset question is dropped, never answered for the user. */
@@ -712,20 +547,13 @@ final class LevelView extends View implements Access.Nodes {
         page = 0;
         ui.resetConfirm = false;
         access.pageChanged(Renderer.H_SETTINGS);
+        paneTitle(null);
     }
 
-    private void setTheme(int idx) {
-        if (idx == themeIdx) return;
-        themeIdx = idx;
-        palFrom = ui.pal;
-        palTo = themes[themeIdx];
-        palT = 0f;
-        ui.themeIdx = themeIdx;
-        settings.theme = palTo.name;
-        host.onThemeApplied(palTo);
+    @Override
+    protected void themeChanged(Palette p) {
+        settings.theme = p.name;
         host.onSettingsChanged();
-        announce("Theme " + palTo.name);
-        invalidate();
     }
 
     private void syncSettingsUi(boolean snap) {
@@ -744,6 +572,7 @@ final class LevelView extends View implements Access.Nodes {
             ui.tolPos = ui.tolIdx;
             ui.modePos = ui.mode;
         }
+        setHaptics(settings.haptics);
         dirty = true;
     }
 
@@ -759,50 +588,6 @@ final class LevelView extends View implements Access.Nodes {
         return b.toString();
     }
 
-    private void buzz(boolean strong) {
-        if (!settings.haptics) return;
-        int c;
-        if (strong) c = Build.VERSION.SDK_INT >= 30 ? HapticFeedbackConstants.CONFIRM : HapticFeedbackConstants.VIRTUAL_KEY;
-        else c = HapticFeedbackConstants.KEYBOARD_TAP;
-        performHapticFeedback(c);
-    }
-
-    // ---- accessibility and keyboard ------------------------------------------------------------
-    // The whole UI is one custom view: every target is a virtual node (Access), and the keyboard
-    // or D-pad moves a focus ring over the same targets.
-
-    @Override
-    public AccessibilityNodeProvider getAccessibilityNodeProvider() {
-        return access;
-    }
-
-    @Override
-    protected boolean dispatchHoverEvent(MotionEvent e) {
-        return access.onHover(e) || super.dispatchHoverEvent(e);
-    }
-
-    @Override
-    public void onInitializeAccessibilityNodeInfo(AccessibilityNodeInfo info) {
-        super.onInitializeAccessibilityNodeInfo(info);
-        if (page == 1) info.setContentDescription("Settings");
-    }
-
-    @Override
-    protected void onFocusChanged(boolean gained, int direction, Rect previous) {
-        super.onFocusChanged(gained, direction, previous);
-        access.onFocusChanged(gained);
-    }
-
-    @Override
-    public boolean onKeyDown(int code, KeyEvent e) {
-        return access.onKeyDown(code, e) || super.onKeyDown(code, e);
-    }
-
-    @Override
-    public boolean onKeyUp(int code, KeyEvent e) {
-        return access.onKeyUp(code, e) || super.onKeyUp(code, e);
-    }
-
     @Override
     public String label(int id) {
         switch (id) {
@@ -813,19 +598,8 @@ final class LevelView extends View implements Access.Nodes {
             case Renderer.H_BACK: return "Back";
             case Renderer.H_CAL_CANCEL: return "Cancel calibration";
             case Renderer.H_CAL_READY: return "Ready, it is turned around";
-            default: return ui.page.label(id);
+            default: return super.label(id);
         }
-    }
-
-    @Override
-    public int role(int id) {
-        int r = ui.page.role(id);
-        return r >= 0 ? r : Hits.BUTTON;
-    }
-
-    @Override
-    public boolean checked(int id) {
-        return ui.page.checked(id);
     }
 
     // ---- math --------------------------------------------------------------------------------
