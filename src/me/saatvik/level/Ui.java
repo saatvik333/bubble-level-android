@@ -1,6 +1,8 @@
 package me.saatvik.level;
 
-import android.graphics.RectF;
+import me.saatvik.hairline.Hits;
+import me.saatvik.hairline.Palette;
+import me.saatvik.hairline.SettingsPage;
 
 /** Everything the renderer needs for one frame. Written by LevelView, read by Renderer. */
 final class Ui {
@@ -35,55 +37,17 @@ final class Ui {
     float unitsPos, tolPos, modePos;
     Palette[] themes = {};
     int themeIdx;
-    boolean calibrated, resetConfirm;
-    String calSummary = "";      // calibrated poses, e.g. "face up, 1 edge"
-    String calNote;              // storage failure to show on the calibration row, null when none
+    boolean haptics, keepOn;
     float hapticsT, keepOnT;
-    float settingsScroll;        // px, written by LevelView
-    float settingsMaxScroll;     // px, written by Renderer
+    boolean calibrated, resetConfirm;
+    String calSummary = "";      // calibrated poses, e.g. "Face up, 1 edge", or "Not calibrated"
+    String calNote;              // storage failure to show on the calibration row, null when none
+    /** Built by Renderer each frame it is drawn; scrolled by LevelView. */
+    final SettingsPage page = new SettingsPage();
 
     // written by Renderer for LevelView: on-screen bubble travel of the instrument shown, px
     float travelPx = 1f;
 
-    // interaction
-    int pressedId;
-
-    static final class Hit {
-        int id;
-        final RectF rect = new RectF();
-        float vx, vy, vr;        // visual press feedback: circle (vr > 0), pill (vr == 0), none (vr < 0)
-    }
-
-    final Hit[] hits = new Hit[32];
-    int hitCount;
-
-    Ui() {
-        for (int i = 0; i < hits.length; i++) hits[i] = new Hit();
-    }
-
-    void resetHits() {
-        hitCount = 0;
-    }
-
-    void addHit(int id, float l, float t, float r, float b, float vx, float vy, float vr) {
-        if (hitCount >= hits.length) return;
-        Hit h = hits[hitCount++];
-        h.id = id;
-        h.rect.set(l, t, r, b);
-        h.vx = vx;
-        h.vy = vy;
-        h.vr = vr;
-    }
-
-    int hitAt(float x, float y) {
-        for (int i = hitCount - 1; i >= 0; i--) {
-            if (hits[i].rect.contains(x, y)) return hits[i].id;
-        }
-        return 0;
-    }
-
-    Hit find(int id) {
-        for (int i = 0; i < hitCount; i++) if (hits[i].id == id) return hits[i];
-        return null;
-    }
+    // interaction: targets, written by Renderer each frame; pressed and focused by LevelView
+    final Hits hits = new Hits(32);
 }

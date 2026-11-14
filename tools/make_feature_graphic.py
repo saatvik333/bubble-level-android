@@ -1,10 +1,10 @@
-"""Renders the 1024x500 Play Store feature graphic in the app's Aurum theme (see Palette.java)."""
+"""Renders the 1024x500 Play Store feature graphic in the app's Aurum theme (see hairline Palette.java)."""
 import os
 from PIL import Image, ImageDraw, ImageFont
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 OUT = os.path.join(ROOT, "fastlane", "metadata", "android", "en-US", "images", "featureGraphic.png")
-FONTS = os.path.join(ROOT, "assets", "fonts")
+FONTS = os.path.join(ROOT, "hairline", "assets", "fonts")
 
 BG = (0x2B, 0x2A, 0x27)
 FG = (0xE9, 0xE5, 0xD9)

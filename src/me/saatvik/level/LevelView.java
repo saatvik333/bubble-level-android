@@ -2,26 +2,29 @@ package me.saatvik.level;
 
 import android.content.Context;
 import android.graphics.Canvas;
-import android.graphics.Insets;
 import android.graphics.Rect;
 import android.os.Build;
-import android.os.Bundle;
-import android.view.DisplayCutout;
 import android.view.HapticFeedbackConstants;
+import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
-import android.view.ViewParent;
 import android.view.WindowInsets;
-import android.view.accessibility.AccessibilityEvent;
-import android.view.accessibility.AccessibilityManager;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityNodeProvider;
 
 import java.util.Locale;
 
-/** Owns animation state and input; delegates all drawing to {@link Renderer}. */
-final class LevelView extends View {
+import me.saatvik.hairline.Access;
+import me.saatvik.hairline.Chrome;
+import me.saatvik.hairline.Hits;
+import me.saatvik.hairline.Kit;
+import me.saatvik.hairline.Motion;
+import me.saatvik.hairline.Palette;
+import me.saatvik.hairline.Themes;
+
+/** Owns animation state and input; delegates all drawing to {@link Renderer}, accessibility and keys to {@link Access}. */
+final class LevelView extends View implements Access.Nodes {
 
     interface Host {
         void onThemeApplied(Palette target);
@@ -44,8 +47,8 @@ final class LevelView extends View {
     private final Palette[] themes;
     private final Host host;
     private final float slop;
-    private final A11y a11y = new A11y();
-    private final AccessibilityManager am;
+    private final Access access = new Access(this, ui.hits, this);
+    private final Rect insets = new Rect();
 
     private int themeIdx;
     private Palette palFrom, palTo;
@@ -75,7 +78,6 @@ final class LevelView extends View {
     private int downId;
     private float downX, downY, lastY;
     private boolean scrolling, multi;
-    private int hitSig;
 
     LevelView(Context ctx, Renderer renderer, LevelEngine engine, Settings settings, Palette[] themes, Host host) {
         super(ctx);
@@ -84,14 +86,12 @@ final class LevelView extends View {
         this.settings = settings;
         this.themes = themes;
         this.host = host;
-        am = (AccessibilityManager) ctx.getSystemService(Context.ACCESSIBILITY_SERVICE);
         float density = getResources().getDisplayMetrics().density;
         ui.dp = density;
-        ui.sp = Math.min(getResources().getDisplayMetrics().scaledDensity, density * 1.3f);
+        ui.sp = Math.min(getResources().getDisplayMetrics().scaledDensity, density * Kit.MAX_FONT_SCALE);
         slop = ViewConfiguration.get(ctx).getScaledTouchSlop();
 
-        themeIdx = 0;
-        for (int i = 0; i < themes.length; i++) if (themes[i].name.equals(settings.theme)) themeIdx = i;
+        themeIdx = Themes.indexOf(themes, settings.theme);
         palFrom = palTo = themes[themeIdx];
         ui.pal = palTo;
         ui.themes = themes;
@@ -141,7 +141,9 @@ final class LevelView extends View {
         }
     }
 
-    boolean handleBack() {
+    /** Closes the settings page or stops calibration; false at the top level. Escape and system back. */
+    @Override
+    public boolean back() {
         if (page == 1) {
             closeSettings();
             invalidate();
@@ -159,31 +161,11 @@ final class LevelView extends View {
 
     @Override
     public WindowInsets onApplyWindowInsets(WindowInsets in) {
-        int l, t, r, b;
-        if (Build.VERSION.SDK_INT >= 30) {
-            // system bars + display cutout; the deprecated getters leave the cutout out
-            Insets ins = in.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
-            l = ins.left;
-            t = ins.top;
-            r = ins.right;
-            b = ins.bottom;
-        } else {
-            l = in.getSystemWindowInsetLeft();
-            t = in.getSystemWindowInsetTop();
-            r = in.getSystemWindowInsetRight();
-            b = in.getSystemWindowInsetBottom();
-            DisplayCutout cut = Build.VERSION.SDK_INT >= 28 ? in.getDisplayCutout() : null;
-            if (cut != null) {
-                l = Math.max(l, cut.getSafeInsetLeft());
-                t = Math.max(t, cut.getSafeInsetTop());
-                r = Math.max(r, cut.getSafeInsetRight());
-                b = Math.max(b, cut.getSafeInsetBottom());
-            }
-        }
-        ui.insetL = l;
-        ui.insetT = t;
-        ui.insetR = r;
-        ui.insetB = b;
+        Chrome.insets(in, insets);
+        ui.insetL = insets.left;
+        ui.insetT = insets.top;
+        ui.insetR = insets.right;
+        ui.insetB = insets.bottom;
         invalidate();
         return in;
     }
@@ -211,8 +193,7 @@ final class LevelView extends View {
         lastDrawNs = now;
         boolean animating = step(dt, now);
         renderer.draw(c, ui);
-        if (ui.settingsScroll > ui.settingsMaxScroll) ui.settingsScroll = ui.settingsMaxScroll;
-        a11yAfterFrame();
+        access.afterFrame();
         loop = running && animating;
         if (loop) postInvalidateOnAnimation();
         else lastNs = 0;                   // next frame after an idle gap starts with a nominal dt
@@ -222,19 +203,20 @@ final class LevelView extends View {
         boolean anim = false;
 
         if (palT < 1f) {
-            palT = Math.min(1f, palT + dt / 0.45f);
-            ui.pal = Palette.lerp(palFrom, palTo, ease(palT));
+            palT = Math.min(1f, palT + dt / Motion.THEME);
+            ui.pal = Palette.lerp(palFrom, palTo, Motion.ease(palT));
             anim = true;
         }
 
-        ui.pageT = approach(ui.pageT, page, dt, 0.085f);
+        ui.pageT = Motion.approach(ui.pageT, page, dt, Motion.PAGE);
         anim |= ui.pageT != page;
+        access.list = page == 1 ? ui.page : null;
 
         handleCalibration(now);
         host.setBackIntercept(page == 1 || engine.cal != LevelEngine.CAL_IDLE);   // host no-ops if unchanged
 
         boolean edge = engine.mode == LevelEngine.MODE_EDGE;
-        ui.modeT = approach(ui.modeT, edge ? 1f : 0f, dt, 0.08f);
+        ui.modeT = Motion.approach(ui.modeT, edge ? 1f : 0f, dt, 0.08f);
         anim |= ui.modeT != (edge ? 1f : 0f);
         if (edge) {
             float d = LevelEngine.wrap(engine.quarter - rot);
@@ -273,7 +255,7 @@ final class LevelView extends View {
             level = next;
         }
         float lt = level ? 1f : 0f;
-        ui.levelT = approach(ui.levelT, lt, dt, 0.07f);
+        ui.levelT = Motion.approach(ui.levelT, lt, dt, 0.07f);
         anim |= ui.levelT != lt;
         if (ui.pulseT >= 0f) {
             ui.pulseT += dt / 0.7f;
@@ -285,12 +267,12 @@ final class LevelView extends View {
         if (flash != null) anim = true;
 
         float h = settings.haptics ? 1f : 0f, k = settings.keepOn ? 1f : 0f;
-        ui.hapticsT = approach(ui.hapticsT, h, dt, 0.06f);
-        ui.keepOnT = approach(ui.keepOnT, k, dt, 0.06f);
+        ui.hapticsT = Motion.approach(ui.hapticsT, h, dt, Motion.CONTROL);
+        ui.keepOnT = Motion.approach(ui.keepOnT, k, dt, Motion.CONTROL);
         anim |= ui.hapticsT != h || ui.keepOnT != k;
-        ui.unitsPos = approach(ui.unitsPos, ui.units, dt, 0.06f);
-        ui.tolPos = approach(ui.tolPos, ui.tolIdx, dt, 0.06f);
-        ui.modePos = approach(ui.modePos, ui.mode, dt, 0.06f);
+        ui.unitsPos = Motion.approach(ui.unitsPos, ui.units, dt, Motion.CONTROL);
+        ui.tolPos = Motion.approach(ui.tolPos, ui.tolIdx, dt, Motion.CONTROL);
+        ui.modePos = Motion.approach(ui.modePos, ui.mode, dt, Motion.CONTROL);
         anim |= ui.unitsPos != ui.units || ui.tolPos != ui.tolIdx || ui.modePos != ui.mode;
         return anim || engine.cal != LevelEngine.CAL_IDLE;
     }
@@ -588,7 +570,7 @@ final class LevelView extends View {
     }
 
     private void announce(String s) {
-        if (am != null && am.isEnabled()) announceForAccessibility(s);
+        access.announce(s);
     }
 
     // ---- input -------------------------------------------------------------------------------
@@ -602,13 +584,14 @@ final class LevelView extends View {
                 downY = y;
                 lastY = y;
                 scrolling = multi = false;
-                downId = ui.hitAt(x, y);
-                ui.pressedId = downId;
+                ui.hits.focused = 0;           // touch hides the keyboard focus ring
+                downId = ui.hits.at(x, y);
+                ui.hits.pressed = downId;
                 invalidate();
                 return true;
             case MotionEvent.ACTION_POINTER_DOWN:
                 multi = true;                  // a second finger cancels the gesture
-                ui.pressedId = 0;
+                ui.hits.pressed = 0;
                 downId = 0;
                 scrolling = false;
                 invalidate();
@@ -616,33 +599,28 @@ final class LevelView extends View {
             case MotionEvent.ACTION_MOVE: {
                 if (multi) return true;
                 float dx = x - downX, dy = y - downY;
-                if (!scrolling && page == 1 && ui.settingsMaxScroll > 0f
+                if (!scrolling && page == 1 && ui.page.maxScroll > 0f
                         && Math.abs(dy) > slop && Math.abs(dy) > Math.abs(dx)) {
                     scrolling = true;
                 }
-                if (scrolling) {
-                    ui.settingsScroll = clamp(ui.settingsScroll - (y - lastY), 0f, ui.settingsMaxScroll);
-                    invalidate();
-                }
+                if (scrolling && ui.page.scrollBy(lastY - y)) invalidate();
                 lastY = y;
-                if (scrolling || (ui.pressedId != 0 && ui.hitAt(x, y) != downId)) {
-                    if (ui.pressedId != 0) {
-                        ui.pressedId = 0;
-                        invalidate();
-                    }
+                if (ui.hits.pressed != 0 && (scrolling || ui.hits.at(x, y) != downId)) {
+                    ui.hits.pressed = 0;
+                    invalidate();
                 }
                 return true;
             }
             case MotionEvent.ACTION_UP: {
-                ui.pressedId = 0;
-                if (!multi && !scrolling && downId != 0 && ui.hitAt(x, y) == downId) action(downId);
+                ui.hits.pressed = 0;
+                if (!multi && !scrolling && downId != 0 && ui.hits.at(x, y) == downId) activate(downId);
                 scrolling = multi = false;
                 downId = 0;
                 invalidate();
                 return true;
             }
             case MotionEvent.ACTION_CANCEL:
-                ui.pressedId = 0;
+                ui.hits.pressed = 0;
                 scrolling = multi = false;
                 downId = 0;
                 invalidate();
@@ -652,12 +630,14 @@ final class LevelView extends View {
         }
     }
 
-    private void action(int id) {
+    @Override
+    public void activate(int id) {
         boolean changed = false, calChanged = false;
         switch (id) {
             case Renderer.H_SETTINGS:
                 page = 1;
-                ui.settingsScroll = 0f;
+                ui.page.scroll = 0f;
+                access.pageChanged(0);
                 break;
             case Renderer.H_BACK: closeSettings(); break;
             case Renderer.H_CALIBRATE:
@@ -682,11 +662,11 @@ final class LevelView extends View {
                 changed = true;
                 break;
             case Renderer.H_RESET:
-                ui.resetConfirm = true;
-                announce("Erase the saved offsets for every pose?");
+                // Reset asks; while it asks, the same id is Keep, which drops the question
+                ui.resetConfirm = !ui.resetConfirm;
+                if (ui.resetConfirm) announce("Erase the saved offsets for every pose?");
                 break;
-            case Renderer.H_RESET_KEEP: ui.resetConfirm = false; break;
-            case Renderer.H_RESET_ERASE:
+            case Renderer.H_ERASE:
                 ui.resetConfirm = false;
                 settings.clearCalibration();
                 for (int i = 0; i < 4; i++) engine.surf[i] = engine.edge[i] = 0f;
@@ -727,10 +707,11 @@ final class LevelView extends View {
         invalidate();
     }
 
-    /** Back to the level; an unanswered reset question is dropped, never answered for the user. */
+    /** Back to the level, keyboard focus to the settings button; an unanswered reset question is dropped, never answered for the user. */
     private void closeSettings() {
         page = 0;
         ui.resetConfirm = false;
+        access.pageChanged(Renderer.H_SETTINGS);
     }
 
     private void setTheme(int idx) {
@@ -751,6 +732,8 @@ final class LevelView extends View {
         ui.units = settings.units;
         ui.tolIdx = settings.tolIdx;
         ui.mode = settings.lock;
+        ui.haptics = settings.haptics;
+        ui.keepOn = settings.keepOn;
         ui.calibrated = settings.calibrated;
         ui.calSummary = calSummary(settings.calMask);
         ui.guideLabels = settings.units == 0;
@@ -764,13 +747,15 @@ final class LevelView extends View {
         dirty = true;
     }
 
-    /** "face up, 2 edges" style list of the calibrated poses, empty when none. */
+    /** "Face up, 2 edges" style list of the calibrated poses, "Not calibrated" when none. */
     static String calSummary(int mask) {
         StringBuilder b = new StringBuilder();
         if ((mask & 1) != 0) b.append("face up");
         if ((mask & 2) != 0) b.append(b.length() > 0 ? ", " : "").append("face down");
         int edges = Integer.bitCount((mask >> 2) & 0xF);
         if (edges > 0) b.append(b.length() > 0 ? ", " : "").append(edges).append(edges == 1 ? " edge" : " edges");
+        if (b.length() == 0) return "Not calibrated";
+        b.setCharAt(0, Character.toUpperCase(b.charAt(0)));
         return b.toString();
     }
 
@@ -782,262 +767,70 @@ final class LevelView extends View {
         performHapticFeedback(c);
     }
 
-    // ---- accessibility -----------------------------------------------------------------------
-    // The whole UI is one custom view; every hit target is exposed as a virtual node so TalkBack,
-    // Switch Access and keyboard users can reach the controls.
+    // ---- accessibility and keyboard ------------------------------------------------------------
+    // The whole UI is one custom view: every target is a virtual node (Access), and the keyboard
+    // or D-pad moves a focus ring over the same targets.
 
     @Override
     public AccessibilityNodeProvider getAccessibilityNodeProvider() {
-        return a11y;
+        return access;
     }
 
     @Override
     protected boolean dispatchHoverEvent(MotionEvent e) {
-        return a11y.onHover(e) || super.dispatchHoverEvent(e);
+        return access.onHover(e) || super.dispatchHoverEvent(e);
     }
 
-    private void a11yAfterFrame() {
-        if (am == null || !am.isEnabled()) return;
-        a11y.prune();
-        int sig = 17;
-        for (int i = 0; i < ui.hitCount; i++) sig = sig * 31 + ui.hits[i].id;
-        if (page == 1) sig = sig * 31 + Math.round(ui.settingsScroll / ui.dp);   // bounds moved
-        if (sig != hitSig) {
-            hitSig = sig;
-            ViewParent parent = getParent();
-            if (parent != null) {
-                AccessibilityEvent ev = AccessibilityEvent.obtain(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED);
-                onInitializeAccessibilityEvent(ev);
-                ev.setContentChangeTypes(AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE);
-                parent.requestSendAccessibilityEvent(this, ev);
-            }
-        }
+    @Override
+    public void onInitializeAccessibilityNodeInfo(AccessibilityNodeInfo info) {
+        super.onInitializeAccessibilityNodeInfo(info);
+        if (page == 1) info.setContentDescription("Settings");
     }
 
-    private String label(int id) {
+    @Override
+    protected void onFocusChanged(boolean gained, int direction, Rect previous) {
+        super.onFocusChanged(gained, direction, previous);
+        access.onFocusChanged(gained);
+    }
+
+    @Override
+    public boolean onKeyDown(int code, KeyEvent e) {
+        return access.onKeyDown(code, e) || super.onKeyDown(code, e);
+    }
+
+    @Override
+    public boolean onKeyUp(int code, KeyEvent e) {
+        return access.onKeyUp(code, e) || super.onKeyUp(code, e);
+    }
+
+    @Override
+    public String label(int id) {
         switch (id) {
             case Renderer.H_SETTINGS: return "Settings";
             case Renderer.H_CALIBRATE: return engine.cal != LevelEngine.CAL_IDLE ? "Stop calibration" : "Calibrate";
             case Renderer.H_HOLD: return held ? "Resume live reading" : "Hold reading";
             case Renderer.H_READOUT: return ui.calActive ? ui.calTitle + ". " + ui.secondary : readingText();
             case Renderer.H_BACK: return "Back";
-            case Renderer.H_HAPTIC: return "Haptic feedback";
-            case Renderer.H_KEEPON: return "Keep screen on";
-            case Renderer.H_RESET: return "Reset calibration. Calibrated: " + ui.calSummary;
-            case Renderer.H_RESET_KEEP: return "Keep calibration";
-            case Renderer.H_RESET_ERASE: return "Erase calibration for every pose";
             case Renderer.H_CAL_CANCEL: return "Cancel calibration";
             case Renderer.H_CAL_READY: return "Ready, it is turned around";
-            default:
-                if (id >= Renderer.H_UNITS && id < Renderer.H_UNITS + Settings.UNITS.length) {
-                    return "Units, " + Settings.UNITS[id - Renderer.H_UNITS];
-                }
-                if (id >= Renderer.H_TOL && id < Renderer.H_TOL + Settings.TOLERANCE.length) {
-                    return "Level tolerance, ± " + ui.tolOpts[id - Renderer.H_TOL];
-                }
-                if (id >= Renderer.H_MODE && id < Renderer.H_MODE + Settings.LOCKS.length) {
-                    return "Mode, " + Settings.LOCKS[id - Renderer.H_MODE];
-                }
-                if (id >= Renderer.H_THEME && id < Renderer.H_THEME + themes.length) {
-                    return "Theme " + themes[id - Renderer.H_THEME].name;
-                }
-                return "";
+            default: return ui.page.label(id);
         }
     }
 
-    /** 1 checked, 0 unchecked, -1 for targets that are not checkable. */
-    private int checked(int id) {
-        if (id == Renderer.H_HAPTIC) return settings.haptics ? 1 : 0;
-        if (id == Renderer.H_KEEPON) return settings.keepOn ? 1 : 0;
-        if (id >= Renderer.H_UNITS && id < Renderer.H_UNITS + Settings.UNITS.length) {
-            return settings.units == id - Renderer.H_UNITS ? 1 : 0;
-        }
-        if (id >= Renderer.H_TOL && id < Renderer.H_TOL + Settings.TOLERANCE.length) {
-            return settings.tolIdx == id - Renderer.H_TOL ? 1 : 0;
-        }
-        if (id >= Renderer.H_MODE && id < Renderer.H_MODE + Settings.LOCKS.length) {
-            return settings.lock == id - Renderer.H_MODE ? 1 : 0;
-        }
-        if (id >= Renderer.H_THEME && id < Renderer.H_THEME + themes.length) {
-            return themeIdx == id - Renderer.H_THEME ? 1 : 0;
-        }
-        return -1;
+    @Override
+    public int role(int id) {
+        int r = ui.page.role(id);
+        return r >= 0 ? r : Hits.BUTTON;
     }
 
-    private String roleOf(int id) {
-        if (id == Renderer.H_HAPTIC || id == Renderer.H_KEEPON) return "android.widget.Switch";
-        return checked(id) >= 0 ? "android.widget.RadioButton" : "android.widget.Button";
-    }
-
-    private final class A11y extends AccessibilityNodeProvider {
-        private static final int NONE = Integer.MIN_VALUE;
-        private int focused = NONE, hovered = NONE;
-        private final Rect r = new Rect();
-        private final int[] loc = new int[2];
-
-        @Override
-        public AccessibilityNodeInfo createAccessibilityNodeInfo(int id) {
-            if (id == HOST_VIEW_ID) {
-                AccessibilityNodeInfo info = AccessibilityNodeInfo.obtain(LevelView.this);
-                onInitializeAccessibilityNodeInfo(info);
-                if (page == 1) info.setContentDescription("Settings");
-                for (int i = 0; i < ui.hitCount; i++) info.addChild(LevelView.this, ui.hits[i].id);
-                if (scrollable()) {
-                    // settings rows below the fold are reached by scrolling, like a ScrollView
-                    info.setClassName("android.widget.ScrollView");
-                    info.setScrollable(true);
-                    if (ui.settingsScroll > 0f) {
-                        info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_BACKWARD);
-                    }
-                    if (ui.settingsScroll < ui.settingsMaxScroll) {
-                        info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_FORWARD);
-                    }
-                }
-                return info;
-            }
-            Ui.Hit h = ui.find(id);
-            if (h == null) return null;
-            AccessibilityNodeInfo info = AccessibilityNodeInfo.obtain(LevelView.this, id);
-            info.setPackageName(getContext().getPackageName());
-            int state = checked(id);
-            info.setClassName(roleOf(id));
-            info.setContentDescription(label(id));
-            if (state >= 0) {
-                info.setCheckable(true);
-                info.setChecked(state == 1);
-            }
-            info.setParent(LevelView.this);
-            r.set(Math.round(h.rect.left), Math.round(h.rect.top), Math.round(h.rect.right), Math.round(h.rect.bottom));
-            info.setBoundsInParent(r);
-            getLocationOnScreen(loc);
-            r.offset(loc[0], loc[1]);
-            info.setBoundsInScreen(r);
-            info.setVisibleToUser(true);
-            info.setEnabled(true);
-            info.setFocusable(true);
-            info.setClickable(true);
-            info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_CLICK);
-            if (focused == id) {
-                info.setAccessibilityFocused(true);
-                info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_ACCESSIBILITY_FOCUS);
-            } else {
-                info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_ACCESSIBILITY_FOCUS);
-            }
-            return info;
-        }
-
-        @Override
-        public boolean performAction(int id, int action, Bundle args) {
-            if (id == HOST_VIEW_ID) {
-                if (scrollable() && (action == AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
-                        || action == AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)) {
-                    float pageH = Math.max(48f * ui.dp, (ui.height - ui.insetB - ui.insetT - 56f * ui.dp) * 0.8f);
-                    float to = clamp(ui.settingsScroll
-                            + (action == AccessibilityNodeInfo.ACTION_SCROLL_FORWARD ? pageH : -pageH),
-                            0f, ui.settingsMaxScroll);
-                    if (to == ui.settingsScroll) return false;
-                    ui.settingsScroll = to;
-                    invalidate();
-                    sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_SCROLLED);
-                    return true;
-                }
-                return performAccessibilityAction(action, args);
-            }
-            if (ui.find(id) == null) return false;
-            switch (action) {
-                case AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS:
-                    if (focused != id) {
-                        int prev = focused;
-                        focused = id;
-                        if (prev != NONE) send(prev, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUS_CLEARED);
-                        send(id, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED);
-                    }
-                    return true;
-                case AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS:
-                    if (focused == id) {
-                        focused = NONE;
-                        send(id, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUS_CLEARED);
-                    }
-                    return true;
-                case AccessibilityNodeInfo.ACTION_CLICK:
-                    action(id);
-                    send(id, AccessibilityEvent.TYPE_VIEW_CLICKED);
-                    return true;
-                default:
-                    return false;
-            }
-        }
-
-        private boolean scrollable() {
-            return page == 1 && ui.settingsMaxScroll > 0f;
-        }
-
-        /** Forgets focus/hover on targets that are no longer on screen. */
-        void prune() {
-            if (focused != NONE && ui.find(focused) == null) focused = NONE;
-            if (hovered != NONE && ui.find(hovered) == null) hovered = NONE;
-        }
-
-        boolean onHover(MotionEvent e) {
-            if (am == null || !am.isEnabled() || !am.isTouchExplorationEnabled()) return false;
-            switch (e.getActionMasked()) {
-                case MotionEvent.ACTION_HOVER_ENTER:
-                case MotionEvent.ACTION_HOVER_MOVE: {
-                    int id = ui.hitAt(e.getX(), e.getY());
-                    setHovered(id == 0 ? NONE : id);
-                    return id != 0;
-                }
-                case MotionEvent.ACTION_HOVER_EXIT:
-                    if (hovered != NONE) {
-                        setHovered(NONE);
-                        return true;
-                    }
-                    return false;
-                default:
-                    return false;
-            }
-        }
-
-        private void setHovered(int id) {
-            if (id == hovered) return;
-            int prev = hovered;
-            hovered = id;
-            if (id != NONE) send(id, AccessibilityEvent.TYPE_VIEW_HOVER_ENTER);
-            if (prev != NONE) send(prev, AccessibilityEvent.TYPE_VIEW_HOVER_EXIT);
-        }
-
-        private void send(int id, int type) {
-            if (am == null || !am.isEnabled()) return;
-            ViewParent parent = getParent();
-            if (parent == null) return;
-            AccessibilityEvent ev = AccessibilityEvent.obtain(type);
-            ev.setPackageName(getContext().getPackageName());
-            int state = checked(id);
-            ev.setClassName(roleOf(id));
-            ev.setSource(LevelView.this, id);
-            ev.setEnabled(true);
-            ev.setContentDescription(label(id));
-            if (state >= 0) ev.setChecked(state == 1);
-            parent.requestSendAccessibilityEvent(LevelView.this, ev);
-        }
+    @Override
+    public boolean checked(int id) {
+        return ui.page.checked(id);
     }
 
     // ---- math --------------------------------------------------------------------------------
 
-    private static float approach(float v, float target, float dt, float tau) {
-        float n = target + (v - target) * (float) Math.exp(-dt / tau);
-        return Math.abs(n - target) < 0.002f ? target : n;
-    }
-
-    private static float ease(float t) {
-        return t < 0.5f ? 4f * t * t * t : 1f - (float) Math.pow(-2f * t + 2f, 3) / 2f;
-    }
-
     private static float tanh(float x) {
         return (float) Math.tanh(x);
-    }
-
-    private static float clamp(float v, float lo, float hi) {
-        return v < lo ? lo : v > hi ? hi : v;
     }
 }

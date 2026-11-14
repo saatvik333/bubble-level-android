@@ -3,25 +3,18 @@ package me.saatvik.level;
 import android.app.Activity;
 import android.content.SharedPreferences;
 import android.content.res.Configuration;
-import android.content.res.Resources;
-import android.graphics.Typeface;
-import android.graphics.drawable.ColorDrawable;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
-import android.os.Build;
 import android.os.Bundle;
 import android.view.Display;
-import android.view.View;
-import android.view.Window;
-import android.view.WindowInsetsController;
-import android.view.WindowManager;
-import android.window.OnBackInvokedCallback;
-import android.window.OnBackInvokedDispatcher;
 
 import java.io.File;
-import java.util.ArrayList;
+
+import me.saatvik.hairline.Chrome;
+import me.saatvik.hairline.Palette;
+import me.saatvik.hairline.Themes;
 
 public final class MainActivity extends Activity implements SensorEventListener, LevelView.Host {
 
@@ -33,8 +26,7 @@ public final class MainActivity extends Activity implements SensorEventListener,
     private final LevelEngine engine = new LevelEngine();
     private LevelView view;
     private Display display;
-    private OnBackInvokedCallback backCallback;
-    private boolean backRegistered;
+    private Chrome.Back back;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -56,19 +48,18 @@ public final class MainActivity extends Activity implements SensorEventListener,
             gyro = sensors.getDefaultSensor(Sensor.TYPE_GYROSCOPE);
         }
 
-        Typeface light, regular;
-        try {
-            light = Typeface.createFromAsset(getAssets(), "fonts/rubik_300.ttf");
-            regular = Typeface.createFromAsset(getAssets(), "fonts/rubik_400.ttf");
-        } catch (RuntimeException e) {
-            light = Typeface.create("sans-serif-light", Typeface.NORMAL);
-            regular = Typeface.create("sans-serif", Typeface.NORMAL);
-        }
-
-        view = new LevelView(this, new Renderer(light, regular), engine, settings, themes(), this);
+        view = new LevelView(this, new Renderer(Chrome.font(getAssets(), 300), Chrome.font(getAssets(), 400)),
+                engine, settings, Themes.all(this), this);
+        back = new Chrome.Back(this, view);
         setContentView(view);
-        setupWindow();
+        Chrome.edgeToEdge(getWindow());
         onThemeApplied(view.currentTarget());
+    }
+
+    @Override
+    public void onAttachedToWindow() {
+        super.onAttachedToWindow();
+        onThemeApplied(view.currentTarget());   // Android 11 can drop bar appearance set before attach
     }
 
     @Override
@@ -90,29 +81,13 @@ public final class MainActivity extends Activity implements SensorEventListener,
     /** Before Android 13: legacy back dispatch. */
     @Override
     public void onBackPressed() {
-        if (!view.handleBack()) super.onBackPressed();
+        if (!view.back()) super.onBackPressed();
     }
 
-    /**
-     * Android 13+ (enableOnBackInvokedCallback): onBackPressed is no longer called. A callback is
-     * registered only while the view has something to close (settings page, calibration), so at
-     * the top level the system keeps its predictive back-to-home animation.
-     */
+    /** Android 13+: back reaches the view only while it has something to close (settings page, calibration). */
     @Override
     public void setBackIntercept(boolean on) {
-        if (Build.VERSION.SDK_INT < 33 || on == backRegistered) return;
-        OnBackInvokedDispatcher dispatcher = getOnBackInvokedDispatcher();
-        if (backCallback == null) {
-            backCallback = () -> {
-                if (!view.handleBack()) setBackIntercept(false);
-            };
-        }
-        if (on) {
-            dispatcher.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT, backCallback);
-        } else {
-            dispatcher.unregisterOnBackInvokedCallback(backCallback);
-        }
-        backRegistered = on;
+        back.intercept(on);
     }
 
     @Override
@@ -173,81 +148,6 @@ public final class MainActivity extends Activity implements SensorEventListener,
 
     @Override
     public void onThemeApplied(Palette p) {
-        Window w = getWindow();
-        w.setBackgroundDrawable(new ColorDrawable(p.bg));
-        boolean lightBars = !p.dark;
-        if (Build.VERSION.SDK_INT < 26) {
-            // No dark navigation icons before 8.0: give the white ones a scrim on light themes.
-            w.setNavigationBarColor(lightBars ? 0x66000000 : 0);
-        }
-        if (Build.VERSION.SDK_INT >= 30) {
-            WindowInsetsController ctl = w.getInsetsController();
-            if (ctl != null) {
-                int mask = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
-                        | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
-                ctl.setSystemBarsAppearance(lightBars ? mask : 0, mask);
-                return;
-            }
-        }
-        View decor = w.getDecorView();
-        int f = decor.getSystemUiVisibility();
-        int light = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | (Build.VERSION.SDK_INT >= 26 ? 0x10 : 0);
-        decor.setSystemUiVisibility(lightBars ? (f | light) : (f & ~light));
-    }
-
-    // ---- window ------------------------------------------------------------------------------
-
-    private void setupWindow() {
-        Window w = getWindow();
-        w.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS
-                | WindowManager.LayoutParams.FLAG_TRANSLUCENT_NAVIGATION);
-        w.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
-        if (Build.VERSION.SDK_INT < 35) {
-            w.setStatusBarColor(0);
-            w.setNavigationBarColor(0);
-        }
-        if (Build.VERSION.SDK_INT >= 29) {
-            w.setNavigationBarContrastEnforced(false);
-            w.setStatusBarContrastEnforced(false);
-        }
-        if (Build.VERSION.SDK_INT >= 28) {
-            WindowManager.LayoutParams lp = w.getAttributes();
-            lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
-            w.setAttributes(lp);
-        }
-        if (Build.VERSION.SDK_INT >= 30) {
-            w.setDecorFitsSystemWindows(false);
-        } else {
-            w.getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                    | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                    | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
-        }
-    }
-
-    // ---- themes ------------------------------------------------------------------------------
-
-    private Palette[] themes() {
-        ArrayList<Palette> list = new ArrayList<>();
-        for (Palette p : Palette.BUILT_IN) list.add(p);
-        Palette dyn = wallpaperPalette();
-        if (dyn != null) list.add(dyn);
-        return list.toArray(new Palette[0]);
-    }
-
-    /** Material You colours on Android 12+. */
-    private Palette wallpaperPalette() {
-        if (Build.VERSION.SDK_INT < 31) return null;
-        boolean night = (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK)
-                == Configuration.UI_MODE_NIGHT_YES;
-        if (night) {
-            return new Palette("Wallpaper", true,
-                    getColor(android.R.color.system_neutral1_900), getColor(android.R.color.system_neutral1_100),
-                    getColor(android.R.color.system_neutral2_400), getColor(android.R.color.system_neutral2_700),
-                    getColor(android.R.color.system_accent1_200), getColor(android.R.color.system_accent1_800));
-        }
-        return new Palette("Wallpaper", false,
-                getColor(android.R.color.system_neutral1_10), getColor(android.R.color.system_neutral1_800),
-                getColor(android.R.color.system_neutral2_600), getColor(android.R.color.system_neutral2_100),
-                getColor(android.R.color.system_accent1_600), getColor(android.R.color.system_accent1_0));
+        Chrome.theme(getWindow(), p);
     }
 }

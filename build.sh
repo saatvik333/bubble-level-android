@@ -54,10 +54,11 @@ mkdir -p "$OUT/gen" "$OUT/classes" "$OUT/dex" "$OUT/base/manifest" "$OUT/base/de
 python3 tools/make_icons.py res
 
 # Resources, compiled once in protobuf form: bundletool turns them into the APKs Play serves.
+# Assets (the Rubik fonts) come from the hairline design system.
 "$BT/aapt2" compile --dir res -o "$OUT/res.zip"
 "$BT/aapt2" link --proto-format -I "$JAR" \
     --manifest AndroidManifest.xml \
-    -A assets \
+    -A hairline/assets \
     --java "$OUT/gen" \
     --proguard "$OUT/aapt-rules.pro" \
     --min-sdk-version "$MIN_SDK" --target-sdk-version "$TARGET_SDK" \
@@ -66,7 +67,7 @@ python3 tools/make_icons.py res
 
 javac -nowarn -Xlint:-options -XDsuppressNotes -source 8 -target 8 -encoding UTF-8 \
     -bootclasspath "$JAR" -classpath "$BT/core-lambda-stubs.jar" -d "$OUT/classes" \
-    $(find src "$OUT/gen" -name '*.java')
+    $(find src hairline/src hairline/android "$OUT/gen" -name '*.java')
 (cd "$OUT/classes" && jar --create --file ../classes.jar .)
 
 java -cp "$R8_JAR" com.android.tools.r8.R8 --release --min-api "$MIN_SDK" \
