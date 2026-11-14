@@ -118,3 +118,9 @@ several targets, the ids after it: segmented and themes `id + i` per option, ste
 and `id + 1` (raise), actions `id + i` per button; leave gaps between row ids. The library reserves
 no ids; the header's back id is passed to `Kit.header`. For an in-place confirmation, give the
 question's buttons the trigger's id as their first (safe) one, so keyboard focus stays on it.
+
+## License
+
+Copyright © 2026 Saatvik Sharma. All rights reserved. Published for viewing only; no permission is
+granted to use, copy, modify or distribute it (see [LICENSE](LICENSE)). The Rubik fonts keep the SIL
+Open Font License (`assets/fonts/OFL.txt`).
