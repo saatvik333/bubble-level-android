@@ -1,0 +1,1 @@
+Keyboard and D-pad control: arrows move a visible focus ring, Enter selects, Escape goes back. Text on coloured buttons is darker where it was hard to read in some themes. TalkBack now says a switch's new state after you change it.
