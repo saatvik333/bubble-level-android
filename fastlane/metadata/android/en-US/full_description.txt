@@ -12,7 +12,7 @@ Calibration doesn't need a perfectly flat table. Take a reading, turn the phone 
 • Lock it to flat or edge mode when you need to
 • The screen stays on while you work (you can turn this off)
 • Six colour themes, plus one that matches your wallpaper on Android 12 and later. Pick one in Settings.
-• Works with TalkBack and Switch Access
+• Works with TalkBack, Switch Access, a keyboard or a D-pad
 
 <b>Privacy</b>
 The app has no ads, accounts or analytics. It doesn't have permission to use the internet, so nothing you do in it leaves your phone.

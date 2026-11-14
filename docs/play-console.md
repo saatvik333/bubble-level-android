@@ -10,7 +10,7 @@ Everything Play Console asks for, with the answer to give. The store text and gr
 ## 1. Build the upload
 
     ./build.sh                                  # build/Level.aab
-    VERSION_CODE=4 VERSION_NAME=1.2 ./build.sh  # every later upload needs a higher VERSION_CODE
+    VERSION_CODE=5 VERSION_NAME=1.3 ./build.sh  # every later upload needs a higher VERSION_CODE
 
 The bundle is signed with the **upload key** at `~/.local/share/bubble-level-android/upload.jks`
 (alias `upload`, password in the desktop keyring under `service bubble-level-android key upload-keystore`;
