@@ -1,0 +1,25 @@
+Copyright (c) 2026 Saatvik Sharma. All rights reserved.
+
+This repository, including its source code, design documentation, tools and assets other than the
+fonts named below (the "Work"), is the property of Saatvik Sharma. It is published so that it can be
+read. No license is granted to anyone else.
+
+Without prior written permission from the copyright holder, you may not:
+
+  1. use, run, compile or build the Work, in whole or in part, for any purpose;
+  2. copy, reproduce, modify, translate, adapt or create derivative works of the Work, including
+     apps or design systems that reproduce its code, components or documented design;
+  3. distribute, publish, sublicense, sell or otherwise make the Work or any derivative available
+     to anyone, including as part of another app, product or service;
+  4. use the Work, in whole or in part, to train, fine-tune or evaluate machine-learning models.
+
+Viewing the Work on GitHub, and the forking that GitHub's Terms of Service permit on its platform,
+grant no further rights.
+
+The Rubik fonts in assets/fonts are not part of the Work; they keep their own license, the SIL Open
+Font License (assets/fonts/OFL.txt).
+
+THE WORK IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND. IN NO EVENT SHALL THE COPYRIGHT HOLDER BE
+LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY ARISING FROM THE WORK.
+
+For permission requests: saatvik333sharma@gmail.com
