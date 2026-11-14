@@ -35,8 +35,8 @@ a device. An app compiles both; a preview compiles `src/` with the stubs.
 
 The app carries the library as a subtree at `hairline/` and refers to it only by that path:
 
-    git subtree add  --prefix=hairline <hairline repository> main --squash
-    git subtree pull --prefix=hairline <hairline repository> main --squash
+    git subtree add  --prefix=hairline https://github.com/saatvik333/hairline main --squash
+    git subtree pull --prefix=hairline https://github.com/saatvik333/hairline main --squash
 
 `build.sh`:
 
